@@ -217,8 +217,11 @@ Verified (two-instance runs 13:25–13:45):
   them near x -52..-65) look like spawn templates. How a spawned monster gets woken is **unknown** (activity mask =
   entity vtbl+0x660, RVA 0x6D7200).
 - Doors are not networked: 40 `*door*` entities in Hunter, all f=0x4003 / 0x4103 (`door_use_*`), b6=0, no 0x8 bit,
-  except `door_guard_hospital` / `door_hospital_living_1` (f=0xE003, b6=1). A door test failed to aim: X pressed near
-  `door_use_0003` with the camera facing a wall; no state change on either side. Untested.
+  except `door_guard_hospital` / `door_hospital_living_1` (f=0xE003, b6=1). Door use test (15:20–15:22): host
+  `@teleport 1.3 0 5` then `@aim 410E` (`door_use_0003`; ends 0.26 rad off) shows a wooden door with the hand + X
+  prompt (`evidence/s6_door4`). Pressing X (`@pad 4000 0 0 300`, then 1200 ms) did not open it; no `*door*` entity
+  changed position or forward vector (`fwd=` in `@dump`). Unknown whether the door is script-locked or the press is
+  not seen. Door sync between players is still untested.
 - The client's body has no knife: the clone (20 entities) contains `player_torch_0022` (0x20A),
   `torch_podsvet_0012`, `players_hands_0012`, `player_map_0005` and timers. `players_knife_0009` (0x1F, at the
   origin, f=0x4002) is not a child of `player`, so it is not cloned. Matches the client log

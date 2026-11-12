@@ -430,9 +430,11 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         // b6/b7 = bytes written by the activate/deactivate update RVA 0x6D6DA0
                         // h = health float at +0x308 (loader RVA 0x21C130 reads "health" there; meaningful for
                         // entities of that class only)
-                        snprintf(buf, sizeof(buf), "engine: dump %X '%s' (%.2f,%.2f,%.2f) f=%X b6=%u b7=%u h=%.3f",
+                        // fwd = x/z of the matrix forward row (+0xE0), shows a door's rotation
+                        snprintf(buf, sizeof(buf), "engine: dump %X '%s' (%.2f,%.2f,%.2f) fwd=(%.2f,%.2f) f=%X b6=%u b7=%u h=%.3f",
                                  *(uint16_t*)(e + 0x108), name, *(float*)(e + 0xF0), *(float*)(e + 0xF4),
-                                 *(float*)(e + 0xF8), *(uint32_t*)(e + 0x10C), e[0xB6], e[0xB7], *(float*)(e + 0x308));
+                                 *(float*)(e + 0xF8), *(float*)(e + 0xE0), *(float*)(e + 0xE8), *(uint32_t*)(e + 0x10C),
+                                 e[0xB6], e[0xB7], *(float*)(e + 0x308));
                         LOG_INFO(buf);
                         ++shown;
                     }
