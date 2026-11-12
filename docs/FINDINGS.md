@@ -20,7 +20,11 @@ yet exercised, **unknown** = not found yet.
   values.
 - The host renders the client's body (verified 10:00): after a right-stick turn (`@pad 0 0 0 1500 32000 0`) the
   host's screenshot shows the second Artyom standing where slot 1 is.
-- **Next problems:** both bodies spawn on the same spot. Combat, AI, doors and story events are not checked.
+- Both bodies spawn on the same spot. `@teleport 1 0 0` on the client (after its body appeared) moved it 1 m
+  (x -7.3 to -6.3), and the host got the new position (verified 10:02). The transform is a 4×4 matrix at
+  entity+0xC0 (translation at +0xF0); set_transform = entity vtbl+0x190(&m, 0).
+- **Next problems:** combat (damage between players, NPCs targeting the client), AI, doors and story events are not
+  checked. Level transitions, save/load and LAN are not tested.
 
 ## 2. How the pieces fit (verified unless marked)
 

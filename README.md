@@ -22,7 +22,9 @@ What works:
 
 What does not work yet:
 
-- Both bodies spawn on the same spot. See [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
+- Both bodies spawn on the same spot; the client moves itself away with `@teleport`. See
+  [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
+- Combat, AI, doors and story events are not checked between players.
 - No AI, door or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only
   over loopback.
 
@@ -87,7 +89,7 @@ Output: `build\Release\metro_coop.dll` and `build\Release\injector.exe`.
 4. Run host and client:
    ```
    scripts\set_ini.ps1 host "exec_on_start=@wait_log playing video 30;@wait 1;@pad 1000 0 0 200;@wait 2;@pad 0010 0 0 200;@wait 2;@pad 1000 0 0 200;@wait 2;gameload coop_start;@wait_log load save bin 30;@wait 1;@finish_load;@wait 1;@unpause_all;@wait 4;@net_host;@wait 1;@players 1;@link_actor;@wait_log incoming connection 60;@wait 15;@spawn_player 1;@wait 5;@pad 0 0 32000 4000" exec_delay_s=0
-   scripts\set_ini.ps1 client "exec_on_start=@wait_log playing video 30;@wait 20;connect 127.0.0.1;@wait_log mapstate_loaded_and_waiting 60;@mp 1;@wait 1;@finish_load;@wait 1;@unpause_all;@wait 35;@pad 0 0 32000 4000;@wait 6;@pad 0 32000 0 3000" exec_delay_s=0 engine_bind_port=1001
+   scripts\set_ini.ps1 client "exec_on_start=@wait_log playing video 30;@wait 20;connect 127.0.0.1;@wait_log mapstate_loaded_and_waiting 60;@mp 1;@wait 1;@finish_load;@wait 1;@unpause_all;@wait 20;@teleport 1 0 0;@wait 15;@pad 0 0 32000 4000;@wait 6;@pad 0 32000 0 3000" exec_delay_s=0 engine_bind_port=1001
    scripts\run_test.ps1 -Client -Wait 110
    ```
 5. Check the heartbeat lines. Per instance, logs are in `%LOCALAPPDATA%\MetroCoop\<game folder name>\`:
@@ -120,6 +122,7 @@ allowing it. LAN play will need it allowed.
 | `@players <n>` | resize the engine's net player list (`@players 1` drops a phantom slot) |
 | `@link_actor [slot] [id hex]` | link a net player slot to an actor (default: slot 0 + the local player) |
 | `@spawn_player [slot]` | host only: spawn a copy of the local player as the body of net slot `slot` (default 1) |
+| `@teleport <dx> <dy> <dz>` | move the entity this instance controls by an offset (metres) |
 | `@signal <name>` | raise a level signal |
 | `@watch <rva hex>` / `@watch_slot <n>` / `@watch_net_time` | hardware write-watchpoints (diagnostics) |
 

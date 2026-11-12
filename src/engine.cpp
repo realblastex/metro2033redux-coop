@@ -355,6 +355,26 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     }
                     continue;
                 }
+                if (c.rfind("@teleport", 0) == 0) {
+                    // "@teleport <dx> <dy> <dz>": move the controlled entity (*(g_level+0x38)) by an offset. Its 4x4
+                    // transform is at entity+0xC0 (translation row at +0xF0); set_transform = entity vtbl+0x190(&m, 0),
+                    // as the clone placement (RVA 0x694DA0) uses it. Clients own their body's position, so run it there.
+                    float d[3] = {};
+                    sscanf_s(c.c_str() + 9, "%f %f %f", &d[0], &d[1], &d[2]);
+                    uint8_t* level = g_level_signal ? *(uint8_t**)((uint8_t*)g_level_signal + 0x21 + *(int32_t*)((uint8_t*)g_level_signal + 0x1D)) : nullptr;
+                    uint8_t* e = level ? *(uint8_t**)(level + 0x38) : nullptr;
+                    if (e) {
+                        alignas(16) float m[16];
+                        memcpy(m, e + 0xC0, sizeof(m));
+                        m[12] += d[0]; m[13] += d[1]; m[14] += d[2];
+                        using set_xform_t = void(__fastcall*)(void*, float*, int);
+                        (*(set_xform_t**)e)[0x190 / 8](e, m, 0);
+                    }
+                    char buf[128];
+                    snprintf(buf, sizeof(buf), "engine: teleport %p by (%.1f,%.1f,%.1f)", e, d[0], d[1], d[2]);
+                    LOG_INFO(buf);
+                    continue;
+                }
                 if (c == "@unpause_all") {
                     // Pause stack on the engine object (g_loader): +0x16FE0 { void** handles; u16 cap; u16 size; },
                     // handle -> string object, chars at +0x14. A pause pushed before we were injected is never popped
