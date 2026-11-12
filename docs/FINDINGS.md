@@ -249,8 +249,11 @@ Results (verified):
   `lurker_farm_0002` (x -71) and to the lurker spawn template `vs_clone_lur_first_part` (x 58) and stood there
   ~1 min, also firing. No lurker became active or networked (`* relevant:` none). Both stayed alive and the 290 m
   teleports replicated. `l17_trolley_combat` and `l03_chase` start in cutscenes. A save at a real fight is needed.
-- Unknown: whether the host sees the client's shots (sound/flash/damage), damage between players, AI targeting the
-  client. The client still logs `No ammo item` (7 times before the guard), so its ammo count is probably not real.
+- The host sees the client's shots (verified 14:36): the client ran `@goto F107 3` (new: move the controlled entity
+  3 m along the target's forward row +0xE0; host forward = -x here, the client landed at x 222.1 from 225.0) and
+  fired 12 s. A host screenshot taken during the burst shows the client's body with a muzzle flash and a tracer.
+  The body did not turn to face the host (matrix rotation from `@goto` seems ignored for the view).
+- Unknown: sound, hit damage between players, AI targeting the client. The client still logs `No ammo item` (7 times before the guard), so its ammo count is probably not real.
 
 ### 5.3 Older notes (static, before the run)
 

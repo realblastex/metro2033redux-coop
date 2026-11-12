@@ -19,7 +19,8 @@ What works:
   from its own camera. The client walks its own body with its own input, and the host sees that body move.
 - Both instances are driven without a human. A fake XInput pad and console commands run from a config file.
 - Fast start takes about 30 s from launch to both players in-game.
-- A second, armed level works: on `l19_defence` both players get their own body and rifle, and the client can fire.
+- A second, armed level works: on `l19_defence` both players get their own body and rifle, the client can fire, and
+  the host sees the client's muzzle flash and tracers.
   Three game crashes that assume one single player exist were guarded for this (FINDINGS 5.5).
 
 What does not work yet:
@@ -149,6 +150,7 @@ client.
 | `@link_actor [slot] [id hex]` | link a net player slot to an actor (default: slot 0 + the local player) |
 | `@spawn_player [slot]` | host only: spawn a copy of the local player as the body of net slot `slot` (default 1) |
 | `@teleport <dx> <dy> <dz> [id hex]` | move the entity this instance controls (or entity `id`) by an offset (metres) |
+| `@goto <id hex> [dist]` | move the entity this instance controls `dist` m (default 2) in front of entity `id` |
 | `@spawn <id hex>` | host only: spawn a copy of entity `id` through the engine's network spawn event (diagnostics) |
 | `@dump [filter]` | log id, name, position and flags of entities whose name contains `filter` (diagnostics) |
 | `@signal <name>` | raise a level signal |
