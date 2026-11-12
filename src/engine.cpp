@@ -608,10 +608,10 @@ static void pad_command(const std::string& args) {  // "<buttons hex> <lx> <ly> 
             return;
         }
     }
-    unsigned b = 0; int lx = 0, ly = 0, ms = 0;
-    sscanf_s(args.c_str(), "%x %d %d %d", &b, &lx, &ly, &ms);
+    unsigned b = 0; int lx = 0, ly = 0, ms = 0, rx = 0, ry = 0;  // right stick optional (camera turn)
+    sscanf_s(args.c_str(), "%x %d %d %d %d %d", &b, &lx, &ly, &ms, &rx, &ry);
     std::lock_guard<std::mutex> lock(g_pad_mutex);
-    g_pad.buttons = (uint16_t)b; g_pad.lx = (int16_t)lx; g_pad.ly = (int16_t)ly;
+    g_pad.buttons = (uint16_t)b; g_pad.lx = (int16_t)lx; g_pad.ly = (int16_t)ly; g_pad.rx = (int16_t)rx; g_pad.ry = (int16_t)ry;
     g_pad_until = GetTickCount64() + ms;
     g_pad_on = true;
     LOG_INFO("engine: pad buttons=0x" + args);

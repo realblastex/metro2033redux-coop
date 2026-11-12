@@ -18,8 +18,9 @@ yet exercised, **unknown** = not found yet.
 - The client controls its own body and its movement replicates to the host (verified 09:56): client pad forward 4 s
   moved slot 1 from x=-7.3 to -5.1, strafe moved z from -15.7 to -16.4, and the host's copy of slot 1 shows the same
   values.
-- **Next problems:** the host has not been checked to render the client's body (needs a camera turn: `@pad` has no
-  right stick yet). Both bodies spawn on the same spot. Combat, AI, doors and story events are not checked.
+- The host renders the client's body (verified 10:00): after a right-stick turn (`@pad 0 0 0 1500 32000 0`) the
+  host's screenshot shows the second Artyom standing where slot 1 is.
+- **Next problems:** both bodies spawn on the same spot. Combat, AI, doors and story events are not checked.
 
 ## 2. How the pieces fit (verified unless marked)
 

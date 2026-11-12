@@ -16,14 +16,13 @@ What works:
   from the host's quick save, and both stay in gameplay.
 - The host's player character is linked to network slot 0. The host's movement replicates to the client.
 - The joining player gets its own body (`@spawn_player 1` on the host). The client sees the host's Artyom walk around
-  from its own camera. The client walks its own body with its own input, and the host gets that movement.
+  from its own camera. The client walks its own body with its own input, and the host sees that body move.
 - Both instances are driven without a human. A fake XInput pad and console commands run from a config file.
 - Fast start takes about 30 s from launch to both players in-game.
 
 What does not work yet:
 
-- Not yet checked that the host renders the client's body. Both bodies spawn on the same spot. See
-  [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
+- Both bodies spawn on the same spot. See [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
 - No AI, door or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only
   over loopback.
 
@@ -113,7 +112,7 @@ allowing it. LAN play will need it allowed.
 | `@wait <s>` | pause the list |
 | `@wait_log <text> [timeout_s]` | pause until an engine log line contains `<text>` (default 120 s) |
 | `@skip_video [timeout_s]` | press pad A every second until a video is skipped |
-| `@pad <buttons hex> <lx> <ly> <ms>` | fake XInput pad 0 (A=1000 B=2000 X=4000 Y=8000 START=0010) |
+| `@pad <buttons hex> <lx> <ly> <ms> [rx ry]` | fake XInput pad 0 (A=1000 B=2000 X=4000 Y=8000 START=0010); right stick turns the camera |
 | `@mp <0/1>` | set the engine's multiplayer flag |
 | `@finish_load` | finish a level load (same as the "press any key" after loading) |
 | `@unpause_all` | pop every engine pause (a pause left from startup freezes the game clock) |
