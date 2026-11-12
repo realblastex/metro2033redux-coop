@@ -82,6 +82,17 @@ public:
             if (q == std::string::npos) q = cmds_.size();
             std::string c = trim(cmds_.substr(pos_, q - pos_));
             pos_ = q + 1;
+            // macros: "@host" (on a loaded single-player level) and "@join <ip>" expand in place
+            std::string macro;
+            if (c == "@host") macro = "@net_host;@wait 1;@players 1;@link_actor";
+            else if (c.rfind("@join ", 0) == 0)
+                macro = "connect " + trim(c.substr(6)) +
+                        ";@wait_log mapstate_loaded_and_waiting 60;@mp 1;@wait 1;@finish_load;@wait 1;@unpause_all";
+            if (!macro.empty()) {
+                if (pos_ > cmds_.size()) pos_ = cmds_.size();  // macro was the last command
+                cmds_.insert(pos_, macro + ";");
+                continue;
+            }
             if (c.rfind("@wait ", 0) == 0) { next_ms_ = now + atoi(c.c_str() + 6) * 1000ull; return; }
             bool skip = c.rfind("@skip_video", 0) == 0;
             if (skip || c.rfind("@wait_log ", 0) == 0) {
