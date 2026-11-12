@@ -272,7 +272,9 @@ Results (verified):
 - The host draws the client's body wrong: a large bare arm holding a blade fills the view 1.1 m in front of the host,
   while the client holds its AK (host screenshot `evidence/s6_offset`). The clone's machete (0x2D12) carries the
   remote-held flag there. Guess: the host renders the clone's first-person hands rig (`players_hands` copy) at the
-  client's camera.
+  client's camera. The hands entities sit at the origin with a parent (clone 0xB06 → 0x167, original 0x121A →
+  F107). Setting flag 0x4000 on 0xB06 (seen on hidden templates) changed nothing visible, but in that run the
+  client faced away from the host (new `@goto` facing), so the arm wasn't in view either way (17:14). Unresolved.
 - Player entity state (derived, vtable RVA 0xA81F08): write = vtbl+0x180 → RVA 0x27C040 (base actor state RVA
   0x1E1390, then one byte from the inventory `*(e+0xB70)` vtbl+0x300(inv, &b), then u16 e+0x18A0). Read = vtbl+0x188
   → RVA 0x1CBEB4 → RVA 0x27BF20 (u16 to e+0x18A2, byte to e+0x18A4, then inventory vtbl+0x2F8(inv, &b)). The client
