@@ -1,0 +1,34 @@
+#pragma once
+// Direct access to 4A engine functions (Metro 2033 Redux, Steam Next-Gen build): engine log capture + console commands.
+#include <string>
+#include <cstdint>
+
+struct HWND__;  // windows.h HWND, without pulling windows.h into every includer
+
+namespace metro_coop {
+
+// Finds engine functions by pattern and hooks the engine line logger (slog) so every engine log line
+// is appended to engine_log_path. Safe to call once; returns false if a pattern was not found.
+bool engine_init(const std::string& engine_log_path);
+
+// Queues one console command string; it runs on the game's window thread at its next PeekMessageA call
+// (same console path the game uses for "-map"/"-server" on the command line). Any-thread safe.
+bool engine_exec(const std::string& cmd);
+
+// Keep the game running while its window is unfocused (no "GAME PAUSED"); needed for network play.
+void engine_keep_active();
+
+// The real foreground window (GetForegroundWindow is hooked when keep_active is on). Returns HWND as void*.
+::HWND__* engine_real_foreground_window();
+
+// One-line diagnostics for the heartbeat: MP flag (1 = network game), net frame count, players vector size.
+std::string engine_stats();
+
+// Arm a wait for an engine log line containing text; engine_wait_log_hit() turns true once one is logged.
+void engine_wait_log(const std::string& text);
+bool engine_wait_log_hit();
+
+// Changes the engine's local ENet bind port (default 1000). Needed for a second instance on the same PC.
+bool engine_set_bind_port(uint16_t port);
+
+} // namespace metro_coop

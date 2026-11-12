@@ -1,0 +1,12 @@
+build/
+*.exe
+*.dll
+*.pdb
+*.obj
+*.lib
+*.log
+__pycache__/
+# never commit game files or saves
+*.vfs*
+*.vfx
+*_save*
