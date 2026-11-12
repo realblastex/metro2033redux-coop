@@ -13,7 +13,10 @@ yet exercised, **unknown** = not found yet.
 - Host movement replicates: the slot-0 net position on both sides followed a 4 s forward/back pad input
   (x -7.3 to -3.5 and back).
 - Both instances stay alive in gameplay. The client crash at RVA 0x39A2FD is fixed (see 3.4).
-- The client is a spectator. Its own slot (1) has no actor, so its input does nothing. **This is the next problem.**
+- The joining player gets a body of its own (`@spawn_player 1` on the host after the client joined, see 5). Slot 1 is
+  linked to the new entity (id 0x10B) on both sides. The client sees the host's Artyom walk away from its own camera.
+- The client's own input does not move its body yet. A 6 s backward pad input moved slot 1 by 0.1 m. **This is the
+  next problem.**
 
 ## 2. How the pieces fit (verified unless marked)
 
@@ -106,7 +109,48 @@ null. In plain single player the guard must stay off: it crashed save loads at R
   `mapstate_loaded_and_waiting` is too early and crashed at RVA 0x3175A.
 - A save made after `@net_host` crashed on load at RVA 0x3175A. Make the start save without any net commands.
 
-## 5. Next step: a body for the joining player (derived, not yet run)
+## 5. A body for the joining player
+
+### 5.1 What works (verified 2026-11-12, two runs)
+
+`@spawn_player [slot]` on the host, run after the client joined (`@wait_log incoming connection`, then ~15 s):
+1. `FUN_1406a9a80(g_server, &src_handle, &list, 0xFFFF)` builds the clone list from the SP player (the actor the aim
+   hook found). `src_handle` = the entity's handle object, `*(entity+0xA0)`. `list` = `{u16 triples*, u16 cap,
+   u16 size}`, triple = `{src id, new id, parent}`. Result: 20 entities (the player and its children), root new id
+   0x10B.
+2. `FUN_1406ba940(_, 0, &list, &src_handle, &null, &null, 0, is_player=1, slot, 0, 0, 0, 0)` queues the reliable spawn
+   event (kind 4). With is_player it calls `link_actor(slot, root new id)` at once.
+3. The host executes its own event in RVA 0x6B2490 (reliable event queue runner, jump table RVA 0x6B2C50). The client
+   gets the same event and logs `[net] pid==1, eid==267` (267 = 0x10B).
+
+Result: heartbeat `s1=10B/5` on both sides. The client's screenshot shows the host's Artyom from the client's camera,
+and he walks away when the host moves.
+
+Problems seen:
+- The client's own pad input does not move slot 1 (verified). The cause is unknown. Next: find how pad input
+  reaches an actor in MP (`net_core::update_input`, client→host input packets) and which entity the client's camera
+  and input use. The client still has the SP `player` (id 0) from the quick save.
+- The client logs `!G entity_players_knife: player is absent` / `entity_players_torch: player is absent` once at the
+  spawn.
+- The host logs `!No ammo item. Save level, bleat !!!` hundreds of thousands of times, starting right after
+  `@link_actor` (before the spawn). Harmless so far, but it bloats `engine.log`.
+- Both bodies spawn on the same spot. A spawn offset is still missing.
+- Once the client showed the MP pause menu (`^mainmenu default_mp`) about 25 s after its pad input. The cause is
+  unknown.
+
+### 5.2 How the engine clones (derived)
+
+- Writer: `FUN_1406a6760(g_server, &handle, &writer)` writes the header (RVA 0x49EA0) and then entity vtbl+0x150.
+  Reader: `FUN_1406a7a00(g_server, &out, ver, &reader, 0, force_new, id)` (header, then vtbl+0x148).
+- Stream: `FUN_1406bb890(&stream, &buffer, 0 = read / 1 = write, flags, 0)`. The save uses flags 0x30, the MP respawn
+  manager 0x10.
+- Instantiation: RVA 0x6A9D50 → 0x6A7D70 (walks the triples) → 0x6A85C0 (serialize the source with a6760, read it
+  back with RVA 0x6A8A10 under the new id, flag 0x10000 on +0x6C) → entity vtbl+0xB70 remaps links. RVA 0x694DA0 then
+  copies the transform (entity vtbl+0x190).
+- RVA 0x6951C0 = "spawn N copies" (server only): a9a80 per copy, then ba940 with is_player=0. It has 24 callers in
+  game code.
+
+### 5.3 Older notes (static, before the run)
 
 In MP levels the player bodies already exist in the level, one per slot, linked with `instead_of`. Respawn
 (`actions/net/respawn_ex`, RVA 0x4367F8) only picks a spawn point (RVA 0x3F9E4C) and links via RVA 0x6F5F20, then
@@ -129,15 +173,7 @@ Entity creation primitives:
   6 = player; slot in bits 8..12 of word 4). For players it also calls `link_actor(slot, root new id)`.
   RVA 0x6A9A80 builds the `{src id, new id, parent}` list.
 - The engine clone script action `actions/engine/clone` (vtable RVA 0xB96BE0, execute = spawner RVA 0x6F6210) only
-  gets link targets and sends the event. **Where the host instantiates the clone is unknown.**
-
-Plan:
-1. Get the `player` record. Either read the level's entity records (as at RVA 0x3CBBD0), or serialize the live player
-   with the counterpart of vtbl+0x148 (likely vtbl+0x140 or +0x150; unknown).
-2. Create it with `a50f0` or `a7a00` using a new id ≥ 0x100.
-3. Call `link_actor(slot 1, new id)`.
-4. Do this on the host **before** the client joins. The quick save the client loads then already contains the second
-   body, so no spawn event is needed.
+  gets link targets and sends the event. The host instantiates it when it runs its own event queue (see 5.2).
 
 Runtime check done: over ~90 s of Hunter (intro and walking), creation (RVA 0x6A62A0 / 0x6A7A00) ran only for level
 loads (caller RVA 0x3CBC5E). The story level spawns nothing early on.

@@ -15,14 +15,15 @@ What works:
 - The host turns a running single-player level into a network game. The client connects, loads the host's level
   from the host's quick save, and both stay in gameplay.
 - The host's player character is linked to network slot 0. The host's movement replicates to the client.
+- The joining player gets its own body (`@spawn_player 1` on the host). The client sees the host's Artyom walk around
+  from its own camera.
 - Both instances are driven without a human. A fake XInput pad and console commands run from a config file.
 - Fast start takes about 30 s from launch to both players in-game.
 
 What does not work yet:
 
-- The joining player has no body of its own. The client sees through the host's Artyom, and the client's own input
-  does nothing. Next step: create a second player entity on the host before the client joins. See
-  [docs/FINDINGS.md](docs/FINDINGS.md), "Next step".
+- The client's own input does not move its body yet. Both bodies spawn on the same spot. See
+  [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
 - No AI, door or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only
   over loopback.
 
@@ -34,6 +35,9 @@ Verified test run (log lines from `metro_coop.log`, host then client):
 host   engine: link_actor check: resolves to ...8710 'player'
 host   heartbeat: ... local_idx=0 s0=0/5/(-3.5,-2.6,-15.9)   <- host pad forward moved slot 0 from x=-7.3
 client heartbeat: ... local_idx=1 s0=0/5/(-5.1,-2.6,-15.7)   <- client sees the same slot move
+host   engine: spawn_player 20 entities, root new id 0x10B
+client [net] pid==1, eid==267                                  <- engine.log: client got its body (0x10B)
+client heartbeat: ... local_idx=1 s0=0/5/(-3.5,-2.6,-15.9) s1=10B/5/(-7.3,-2.6,-16.0)
 ```
 
 ## Game identity
@@ -78,9 +82,9 @@ Output: `build\Release\metro_coop.dll` and `build\Release\injector.exe`.
    apart from your real Steam saves. Do not run tests against your real Steam save folder.
 4. Run host and client:
    ```
-   scripts\set_ini.ps1 host "exec_on_start=@wait_log playing video 30;@wait 1;@pad 1000 0 0 200;@wait 2;@pad 0010 0 0 200;@wait 2;@pad 1000 0 0 200;@wait 2;gameload coop_start;@wait_log load save bin 30;@wait 1;@finish_load;@wait 1;@unpause_all;@wait 4;@net_host;@wait 1;@players 1;@link_actor;@wait 30;@pad 0 0 32000 4000;@wait 10;@pad 0 0 -32000 4000" exec_delay_s=0
-   scripts\set_ini.ps1 client "exec_on_start=@wait_log playing video 30;@wait 20;connect 127.0.0.1;@wait_log mapstate_loaded_and_waiting 60;@mp 1;@wait 1;@finish_load;@wait 1;@unpause_all" exec_delay_s=0 engine_bind_port=1001
-   scripts\run_test.ps1 -Client -Wait 80
+   scripts\set_ini.ps1 host "exec_on_start=@wait_log playing video 30;@wait 1;@pad 1000 0 0 200;@wait 2;@pad 0010 0 0 200;@wait 2;@pad 1000 0 0 200;@wait 2;gameload coop_start;@wait_log load save bin 30;@wait 1;@finish_load;@wait 1;@unpause_all;@wait 4;@net_host;@wait 1;@players 1;@link_actor;@wait_log incoming connection 60;@wait 15;@spawn_player 1;@wait 5;@pad 0 0 32000 4000" exec_delay_s=0
+   scripts\set_ini.ps1 client "exec_on_start=@wait_log playing video 30;@wait 20;connect 127.0.0.1;@wait_log mapstate_loaded_and_waiting 60;@mp 1;@wait 1;@finish_load;@wait 1;@unpause_all;@wait 35;@pad 0 0 -32000 6000" exec_delay_s=0 engine_bind_port=1001
+   scripts\run_test.ps1 -Client -Wait 105
    ```
 5. Check the heartbeat lines. Per instance, logs are in `%LOCALAPPDATA%\MetroCoop\<game folder name>\`:
    `metro_coop.log` (ours) and `engine.log` (every engine log line).
@@ -111,6 +115,7 @@ allowing it. LAN play will need it allowed.
 | `@net_host` | turn the loaded single-player level into a network host |
 | `@players <n>` | resize the engine's net player list (`@players 1` drops a phantom slot) |
 | `@link_actor [slot] [id hex]` | link a net player slot to an actor (default: slot 0 + the local player) |
+| `@spawn_player [slot]` | host only: spawn a copy of the local player as the body of net slot `slot` (default 1) |
 | `@signal <name>` | raise a level signal |
 | `@watch <rva hex>` / `@watch_slot <n>` / `@watch_net_time` | hardware write-watchpoints (diagnostics) |
 

@@ -320,6 +320,41 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     }
                     continue;
                 }
+                if (c.rfind("@spawn_player", 0) == 0) {
+                    // "@spawn_player [slot]" (server only): spawn a copy of the SP player for net player <slot>
+                    // (default 1) the way the engine's player spawner (RVA 0x6F6210) does it: build clone id triples
+                    // {src id, new id, parent} with RVA 0x6A9A80, then queue a reliable spawn event with RVA 0x6BA940
+                    // (is_player=1: links the slot to the new root id right away; the event is executed locally by
+                    // RVA 0x6B2490 and replicated to clients).
+                    // shortcut: fixed RVAs for one exe build (SHA-256 097df1a2...), checked by prologue bytes.
+                    int slot = 1;
+                    sscanf(c.c_str() + 13, "%d", &slot);
+                    uint8_t* exe = (uint8_t*)GetModuleHandleA(nullptr);
+                    uint8_t* player = g_seen_actors[0];
+                    void* server = *(void**)(exe + 0xFBD850);
+                    bool ok = exe[0x6A9A80] == 0x66 && exe[0x6BA940] == 0x48 && exe[0x6BA941] == 0x8B;
+                    char buf[200];
+                    snprintf(buf, sizeof(buf), "engine: spawn_player slot %d from %p '%s' (server %p, players %d, ok %d)",
+                             slot, player, entity_name(player), server, g_players ? g_players->size : -1, ok);
+                    LOG_INFO(buf);
+                    if (ok && player && server && g_players && slot < g_players->size) {
+                        struct { void* data; uint16_t cap; uint16_t size; } list{};
+                        void* src = *(void**)(player + 0xA0);  // entity's handle object
+                        void* none = nullptr;
+                        using triples_t = void(__fastcall*)(void*, void**, void*, uint16_t);
+                        using spawn_ev_t = void(__fastcall*)(void*, uint8_t, void*, void**, void**, void**, int, int, int,
+                                                             uint8_t, int, void*, void*);
+                        ((triples_t)(exe + 0x6A9A80))(server, &src, &list, 0xFFFF);
+                        uint16_t n = list.size;
+                        uint16_t root = n ? ((uint16_t*)list.data)[(n - 1) * 3 + 1] : 0xFFFF;
+                        snprintf(buf, sizeof(buf), "engine: spawn_player %u entities, root new id 0x%X", n, root);
+                        LOG_INFO(buf);
+                        if (n) ((spawn_ev_t)(exe + 0x6BA940))(nullptr, 0, &list, &src, &none, &none, 0, 1, slot, 0, 0,
+                                                             nullptr, nullptr);
+                        // shortcut: list.data leaks (a few bytes per spawn); the engine frees it with its own allocator.
+                    }
+                    continue;
+                }
                 if (c == "@unpause_all") {
                     // Pause stack on the engine object (g_loader): +0x16FE0 { void** handles; u16 cap; u16 size; },
                     // handle -> string object, chars at +0x14. A pause pushed before we were injected is never popped
