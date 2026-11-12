@@ -39,7 +39,11 @@ yet exercised, **unknown** = not found yet.
   slot, every entity gets a priority from entity vtbl+0x170 × distance × view-direction factors, accumulated until
   sent. The send job writes the top ones with entity vtbl+0x180 into a ~128-byte budget per packet. A far NPC
   (~140 m) never won a slot within 15 s.
-- The client registers 51 networked entities, the host 39 (the client list was not dumped yet).
+- The client registers 51 networked entities, the host 39 (verified 10:45, `@dump net` on both). The client's extra
+  12: nine `nosalis_*` monsters (`nosalis_side1` … `nosalis_side4_2`, `nosalis_top`), `suhoi_old_0001`,
+  `hunter_old_0001`, `man_place_0017`. The host never sends entities it doesn't list, so the client runs those on its
+  own. Likely desync source once monsters fight. Unknown why the lists differ (the host loaded an SP save, the
+  client the host's quick save).
 - **Next problems:** combat (damage between players, NPCs targeting the client), AI, doors and story events are not
   checked. Level transitions, save/load and LAN are not tested.
 
