@@ -32,6 +32,7 @@ static void install_netframe_counter();
 static void engine_watch_net_time();
 void engine_watch_write(uintptr_t addr);
 static void pad_command(const std::string& args);
+static void aim_command(unsigned id, unsigned ms);
 // Engine MP flag (RVA 0xFBDF2A). net start (RVA 0x6B7EA0): with an address arg it sets the flag and connects as a
 // client; without one it becomes the network server only if this flag is already 1, else a local-only game.
 // So hosting = "@mp 1" then "server" (no arg).
@@ -283,6 +284,21 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     continue;
                 }
                 if (c.rfind("@pad ", 0) == 0) { pad_command(c.substr(5)); continue; }
+                if (c.rfind("@title ", 0) == 0) {  // rename this instance's window (runs on the window thread)
+                    static std::string title;
+                    title = c.substr(7);
+                    EnumThreadWindows(GetCurrentThreadId(), [](HWND w, LPARAM) -> BOOL {
+                        if (IsWindowVisible(w) && !GetParent(w)) SetWindowTextA(w, title.c_str());
+                        return TRUE;
+                    }, 0);
+                    continue;
+                }
+                if (c.rfind("@aim ", 0) == 0) {
+                    unsigned id = 0xFFFF, ms = 3000;
+                    sscanf_s(c.c_str() + 5, "%x %u", &id, &ms);
+                    aim_command(id, ms);
+                    continue;
+                }
                 if (c.rfind("@watch_slot ", 0) == 0) {  // diagnostics: who assigns an actor id to net player <idx>?
                     int i = atoi(c.c_str() + 12);
                     if (g_players && i < g_players->size)
@@ -412,9 +428,11 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         char buf[200];
                         // f = flags +0x10C (8 = networked, 0x20/0x204 checked by make-relevant RVA 0x747F60);
                         // b6/b7 = bytes written by the activate/deactivate update RVA 0x6D6DA0
-                        snprintf(buf, sizeof(buf), "engine: dump %X '%s' (%.2f,%.2f,%.2f) f=%X b6=%u b7=%u",
+                        // h = health float at +0x308 (loader RVA 0x21C130 reads "health" there; meaningful for
+                        // entities of that class only)
+                        snprintf(buf, sizeof(buf), "engine: dump %X '%s' (%.2f,%.2f,%.2f) f=%X b6=%u b7=%u h=%.3f",
                                  *(uint16_t*)(e + 0x108), name, *(float*)(e + 0xF0), *(float*)(e + 0xF4),
-                                 *(float*)(e + 0xF8), *(uint32_t*)(e + 0x10C), e[0xB6], e[0xB7]);
+                                 *(float*)(e + 0xF8), *(uint32_t*)(e + 0x10C), e[0xB6], e[0xB7], *(float*)(e + 0x308));
                         LOG_INFO(buf);
                         ++shown;
                     }
@@ -765,15 +783,51 @@ static bool g_pad_on = false;
 static uint64_t g_pad_until = 0;
 using xgs_t = DWORD(WINAPI*)(DWORD, void*);
 static xgs_t g_xgs_orig = nullptr;
+// "@aim <id hex> <ms>": turn the controlled entity toward entity <id> with the right stick (yaw only). Error = angle
+// between its forward row (+0xE0, x/z) and the direction to the target. The stick sign is not known, so flip it once
+// if the error grows.
+static unsigned g_aim_id = 0xFFFF;
+static float g_aim_sign = 1, g_aim_ref = 0, g_aim_err = 0;
+static int g_aim_frames = 0;
+static void aim_step() {
+    uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA
+    uint8_t* e = lvl ? *(uint8_t**)(lvl + 0x38) : nullptr;
+    uint8_t* t = entity_by_id(g_aim_id);
+    if (!e || !t) { g_pad.rx = 0; return; }
+    float fx = *(float*)(e + 0xE0), fz = *(float*)(e + 0xE8);
+    float dx = *(float*)(t + 0xF0) - *(float*)(e + 0xF0), dz = *(float*)(t + 0xF8) - *(float*)(e + 0xF8);
+    float err = atan2f(fx * dz - fz * dx, fx * dx + fz * dz);
+    g_aim_err = err;
+    if (++g_aim_frames % 30 == 0) {
+        if (g_aim_frames == 30 || fabsf(err) <= g_aim_ref) g_aim_ref = fabsf(err);
+        else if (fabsf(err) > g_aim_ref + 0.05f && g_aim_sign > 0) { g_aim_sign = -1; g_aim_ref = fabsf(err); }
+    }
+    float rx = fabsf(err) < 0.03f ? 0 : g_aim_sign * (err > 0 ? 1 : -1) * (std::min)(32000.f, 9000 + fabsf(err) * 20000);
+    g_pad.rx = (int16_t)rx;
+}
+
 static DWORD WINAPI xgs_hook(DWORD user, void* state) {
     if (user == 0 && g_pad_on && state) {
         std::lock_guard<std::mutex> lock(g_pad_mutex);
-        if (GetTickCount64() >= g_pad_until) { g_pad.buttons = 0; g_pad.lx = g_pad.ly = g_pad.rx = g_pad.ry = 0; g_pad.lt = g_pad.rt = 0; }
+        if (GetTickCount64() >= g_pad_until) {
+            if (g_aim_id != 0xFFFF) {
+                char b[96];
+                snprintf(b, sizeof(b), "engine: aim %X done, error %.2f rad, sign %.0f", g_aim_id, g_aim_err, g_aim_sign);
+                LOG_INFO(b);
+                g_aim_id = 0xFFFF;
+            }
+            g_pad.buttons = 0; g_pad.lx = g_pad.ly = g_pad.rx = g_pad.ry = 0; g_pad.lt = g_pad.rt = 0;
+        } else if (g_aim_id != 0xFFFF) aim_step();
         ++g_pad.packet;
         memcpy(state, &g_pad, sizeof(g_pad));
         return ERROR_SUCCESS;
     }
     return g_xgs_orig(user, state);
+}
+static void aim_command(unsigned id, unsigned ms) {
+    pad_command("0 0 0 " + std::to_string(ms));  // hooks XInput if needed; idle pad for <ms>
+    std::lock_guard<std::mutex> lock(g_pad_mutex);
+    g_aim_id = id; g_aim_sign = 1; g_aim_frames = 0;
 }
 static void pad_command(const std::string& args) {  // "<buttons hex> <lx> <ly> <ms> [rx ry lt rt]" (sticks -32768..32767)
     if (!g_xgs_orig) {

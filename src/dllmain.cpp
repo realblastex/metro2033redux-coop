@@ -86,9 +86,9 @@ public:
             pos_ = q + 1;
             // macros: "@host" (on a loaded single-player level) and "@join <ip>" expand in place
             std::string macro;
-            if (c == "@host") macro = "@net_host;@wait 1;@players 1;@link_actor";
+            if (c == "@host") macro = "@title Metro Redux [host];@net_host;@wait 1;@players 1;@link_actor";
             else if (c.rfind("@join ", 0) == 0)
-                macro = "connect " + trim(c.substr(6)) +
+                macro = "@title Metro Redux [client];connect " + trim(c.substr(6)) +
                         ";@wait_log mapstate_loaded_and_waiting 60;@mp 1;@wait 1;@finish_load;@wait 1;@unpause_all";
             if (!macro.empty()) {
                 if (pos_ > cmds_.size()) pos_ = cmds_.size();  // macro was the last command

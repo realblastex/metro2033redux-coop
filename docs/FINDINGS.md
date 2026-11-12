@@ -253,7 +253,16 @@ Results (verified):
   3 m along the target's forward row +0xE0; host forward = -x here, the client landed at x 222.1 from 225.0) and
   fired 12 s. A host screenshot taken during the burst shows the client's body with a muzzle flash and a tracer.
   The body did not turn to face the host (matrix rotation from `@goto` seems ignored for the view).
-- Unknown: sound, hit damage between players, AI targeting the client. The client still logs `No ammo item` (7 times before the guard), so its ammo count is probably not real.
+- Damage between players works (verified 14:42): health is a float at entity+0x308 (`h=` in `@dump`; the loader
+  RVA 0x21C130 reads `health` there). The client stood 3 m in front of the host (`@goto F107 3`), the host ran
+  `@aim 167 4000` (new: closed-loop right-stick yaw toward an entity; error 0.01 rad) and fired 3 s. The client's
+  body 0x167 went from h=1.000 to h=-1.000 on **both** host and client (dead), the host stayed at 1.000. Both
+  processes stayed alive. Respawn/death handling for the client is untested.
+- Weapon display bug (seen by the owner in one window, probably the client; also in a client screenshot taken after
+  its death, `evidence/s6_aim2/1`): the character holds two guns at once, a pistol and an AK. Guess: the clone copies
+  every weapon child of `player`, and the active-slot/visibility state is not set or replicated for it. A living
+  client frame was inconclusive.
+- Unknown: sound, AI targeting the client. The client still logs `No ammo item` (7 times before the guard), so its ammo count is probably not real.
 
 ### 5.3 Older notes (static, before the run)
 

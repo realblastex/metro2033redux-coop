@@ -20,7 +20,9 @@ What works:
 - Both instances are driven without a human. A fake XInput pad and console commands run from a config file.
 - Fast start takes about 30 s from launch to both players in-game.
 - A second, armed level works: on `l19_defence` both players get their own body and rifle, the client can fire, and
-  the host sees the client's muzzle flash and tracers.
+  the host sees the client's muzzle flash and tracers. Shooting the other player damages them: the host killed the
+  client's body, and both sides agree it is dead.
+- The windows are titled `Metro Redux [host]` and `Metro Redux [client]` after `@host` / `@join`.
   Three game crashes that assume one single player exist were guarded for this (FINDINGS 5.5).
 
 What does not work yet:
@@ -30,7 +32,8 @@ What does not work yet:
 - NPCs near the players replicate from the host (distance priority, ~128 bytes per packet); far NPCs did not update
   within 15 s. An active monster moved on the host shows up on the client. Entities the host spawns (`@spawn`) exist on
   both sides with the same id.
-- The client's body has no knife (the torch is there). Doors are not in the network list; door use between players is
+- The client's body has no knife (the torch is there). The client was seen holding two guns at once (pistol and AK).
+  Death and respawn of a player are not handled. Doors are not in the network list; door use between players is
   untested. Damage, enemy AI and monster fights are untested (Hunter starts unarmed; in `l19_defence` no monster
   attacked within 2.5 min; a spawned monster stays asleep).
 - No AI or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only
@@ -150,6 +153,8 @@ client.
 | `@link_actor [slot] [id hex]` | link a net player slot to an actor (default: slot 0 + the local player) |
 | `@spawn_player [slot]` | host only: spawn a copy of the local player as the body of net slot `slot` (default 1) |
 | `@teleport <dx> <dy> <dz> [id hex]` | move the entity this instance controls (or entity `id`) by an offset (metres) |
+| `@aim <id hex> [ms]` | turn this instance's view toward entity `id` with the fake right stick (yaw only) |
+| `@title <text>` | rename this instance's window (`@host` / `@join` set `[host]` / `[client]`) |
 | `@goto <id hex> [dist]` | move the entity this instance controls `dist` m (default 2) in front of entity `id` |
 | `@spawn <id hex>` | host only: spawn a copy of entity `id` through the engine's network spawn event (diagnostics) |
 | `@dump [filter]` | log id, name, position and flags of entities whose name contains `filter` (diagnostics) |
