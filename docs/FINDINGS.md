@@ -302,9 +302,10 @@ Results (verified):
   - RVA 0x74C6CB in the timed entity-removal callback RVA 0x74C570, on a corpse that was already freed. The guard
     runs it only if the entity is still in g_server's table.
   After that both stayed alive ~95 s after the respawn.
-- **Open:** the respawned client does not move with its pad (forward 2 s at 16:07:46 did nothing). Guess: the
-  single-player death state (input lock / death camera) stays active on the client. The corpse disappears on the
-  client but stays on the host.
+- **Open:** the respawned client can turn (right stick; screenshots `evidence/s6_respawn_input` a/b differ, first
+  person with AK and a pickup prompt) but not walk: forward 2.5 s left it at x 222.6, at both 1.2 m and 2.5 m from
+  the host (so not stuck in the corpse; verified 16:14–16:20). The first body walks fine in the same level. Guess:
+  a death/movement lock from the single-player death stays on the client.
 - Crash diagnostics: a first-chance access-violation logger (`engine: AV rip … stack rvas: …`, first 6) is now always on.
 
 ### 5.3 Older notes (static, before the run)

@@ -561,12 +561,13 @@ void engine_tick() {
     int slot = g_spawn_slot;
     if (slot >= 0 && GetTickCount64() >= g_spawn_at && g_spawn_slot.compare_exchange_strong(slot, -1))
         engine_exec("@spawn_player " + std::to_string(slot));
-    // Client: a respawned body appears on the host's spot; step away like the @join macro does for the first body.
+    // Client: a respawned body appears on the host's spot; step away like the @join macro does for the first body,
+    // but further: at 1.2 m it landed in the corpse of the first body and could turn but not walk (verified 16:14).
     static uint8_t* last_ctl = nullptr;
     uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA
     uint8_t* ctl = lvl ? *(uint8_t**)(lvl + 0x38) : nullptr;
     if (ctl && last_ctl && ctl != last_ctl && *(int32_t*)((uint8_t*)GetModuleHandleA(nullptr) + 0xFD5028) > 0)
-        engine_exec("@goto s0 1.2");
+        engine_exec("@goto s0 2.5");
     if (ctl) last_ctl = ctl;
     // Host: respawn a joiner whose body died (health float entity+0x308 <= 0), 5 s after death.
     // shortcut: fixed 5 s, respawns on the host's spot; upgrade with a respawn point / delay setting.
