@@ -28,6 +28,11 @@ yet exercised, **unknown** = not found yet.
 - NPCs (verified 10:33, `@dump npc` on both sides ~60 s after the join): same 3477 entities with the same ids; 14
   `npc*` entities, positions equal within 0.06 m (e.g. `npc_scene_0001` -157.39 vs -157.45). Unknown: whether the
   host replicates NPCs or both sides simulate the same scripted scene. Most of these NPCs are far from the start room.
+- NPC replication test (verified 10:36): the host teleported `npc_friend_fx_0004` (id 0x3BE) by +100 m
+  (`@teleport 100 0 0 3BE`). The host's copy moved to x=-49.93; the client's copy stayed at -149.93 for 15 s. So that
+  NPC is not replicated; the matching positions came from both sides running the same scripts. Unknown: whether NPCs
+  near a player are replicated. The host's per-player send list is built by `FUN_140747630(net_core, &list, slot)`
+  (in the send job RVA 0x6B4D00), and each entity is written with entity vtbl+0x180. Next: log that list's ids.
 - **Next problems:** combat (damage between players, NPCs targeting the client), AI, doors and story events are not
   checked. Level transitions, save/load and LAN are not tested.
 

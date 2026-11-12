@@ -24,7 +24,8 @@ What does not work yet:
 
 - Both bodies spawn on the same spot; the client moves itself away with `@teleport`. See
   [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
-- Combat, AI, doors and story events are not checked between players.
+- NPCs are not replicated (at least not far from the players): both sides run the same scripts, so they stay in
+  step until something differs. Combat, doors and story events are not checked between players.
 - No AI, door or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only
   over loopback.
 
@@ -141,7 +142,7 @@ client.
 | `@players <n>` | resize the engine's net player list (`@players 1` drops a phantom slot) |
 | `@link_actor [slot] [id hex]` | link a net player slot to an actor (default: slot 0 + the local player) |
 | `@spawn_player [slot]` | host only: spawn a copy of the local player as the body of net slot `slot` (default 1) |
-| `@teleport <dx> <dy> <dz>` | move the entity this instance controls by an offset (metres) |
+| `@teleport <dx> <dy> <dz> [id hex]` | move the entity this instance controls (or entity `id`) by an offset (metres) |
 | `@dump [filter]` | log id, name and position of entities whose name contains `filter` (diagnostics) |
 | `@signal <name>` | raise a level signal |
 | `@watch <rva hex>` / `@watch_slot <n>` / `@watch_net_time` | hardware write-watchpoints (diagnostics) |

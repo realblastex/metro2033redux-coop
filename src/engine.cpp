@@ -389,10 +389,20 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     // "@teleport <dx> <dy> <dz>": move the controlled entity (*(g_level+0x38)) by an offset. Its 4x4
                     // transform is at entity+0xC0 (translation row at +0xF0); set_transform = entity vtbl+0x190(&m, 0),
                     // as the clone placement (RVA 0x694DA0) uses it. Clients own their body's position, so run it there.
+                    // optional 4th arg: entity id (hex) instead of the controlled entity
                     float d[3] = {};
-                    sscanf_s(c.c_str() + 9, "%f %f %f", &d[0], &d[1], &d[2]);
+                    unsigned id = 0xFFFF;
+                    sscanf_s(c.c_str() + 9, "%f %f %f %x", &d[0], &d[1], &d[2], &id);
                     uint8_t* level = g_level_signal ? *(uint8_t**)((uint8_t*)g_level_signal + 0x21 + *(int32_t*)((uint8_t*)g_level_signal + 0x1D)) : nullptr;
                     uint8_t* e = level ? *(uint8_t**)(level + 0x38) : nullptr;
+                    if (id != 0xFFFF) {
+                        e = nullptr;
+                        uint8_t* server = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD850);  // shortcut: fixed RVA
+                        for (int i = 0; server && i < *(uint16_t*)(server + 0x1A) && !e; ++i) {
+                            uint8_t* x = *(uint8_t**)(*(uint8_t**)(server + 0x10) + i * 16 + 8);
+                            if (x && *(uint16_t*)(x + 0x108) == id) e = x;
+                        }
+                    }
                     if (e) {
                         alignas(16) float m[16];
                         memcpy(m, e + 0xC0, sizeof(m));
