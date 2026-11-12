@@ -245,6 +245,10 @@ Results (verified):
 - The host networks 43 entities (humans: diggers, traders, kids, …), the client 69. The client's extra 26 are
   lurkers (`lurker_*`, `lur_*`, `nosach*`), all dormant on both sides (f=0x67, b6=0) and 150+ m away. No monster
   attacked within 2.5 min; walking forward ran into a wall after ~4 m.
+- Monster fights are script-gated, not proximity-gated (verified 14:22–14:30): both players teleported next to
+  `lurker_farm_0002` (x -71) and to the lurker spawn template `vs_clone_lur_first_part` (x 58) and stood there
+  ~1 min, also firing. No lurker became active or networked (`* relevant:` none). Both stayed alive and the 290 m
+  teleports replicated. `l17_trolley_combat` and `l03_chase` start in cutscenes. A save at a real fight is needed.
 - Unknown: whether the host sees the client's shots (sound/flash/damage), damage between players, AI targeting the
   client. The client still logs `No ammo item` (7 times before the guard), so its ammo count is probably not real.
 
