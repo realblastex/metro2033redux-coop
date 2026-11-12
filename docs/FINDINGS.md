@@ -305,7 +305,9 @@ Results (verified):
 - **Open:** the respawned client can turn (right stick; screenshots `evidence/s6_respawn_input` a/b differ, first
   person with AK and a pickup prompt) but not walk: forward 2.5 s left it at x 222.6, at both 1.2 m and 2.5 m from
   the host (so not stuck in the corpse; verified 16:14–16:20). The first body walks fine in the same level. Guess:
-  a death/movement lock from the single-player death stays on the client.
+  a death/movement lock from the single-player death stays on the client. Checked and ruled out: the client's
+  `net_player` (new `@slotdump [slot]`, 0x70 bytes) keeps the dead body's id at +0x62 (0x167) while +0x64 gets the
+  new one (0x250F); setting +0x62 to the new id did not unlock movement (16:29).
 - Crash diagnostics: a first-chance access-violation logger (`engine: AV rip … stack rvas: …`, first 6) is now always on.
 
 ### 5.3 Older notes (static, before the run)

@@ -157,6 +157,7 @@ client.
 | `@link_actor [slot] [id hex]` | link a net player slot to an actor (default: slot 0 + the local player) |
 | `@spawn_player [slot]` | host only: spawn a copy of the local player as the body of net slot `slot` (default 1) |
 | `@teleport <dx> <dy> <dz> [id hex]` | move the entity this instance controls (or entity `id`) by an offset (metres) |
+| `@slotdump [slot]` | log the raw 0x70-byte `net_player` of `slot` (diagnostics) |
 | `@respawn [slot]` | host: give net slot `slot` (default 1) a new body; runs by itself 5 s after that body dies |
 | `@aim <id hex> [ms]` | turn this instance's view toward entity `id` with the fake right stick (yaw only) |
 | `@title <text>` | rename this instance's window (`@host` / `@join` set `[host]` / `[client]`) |

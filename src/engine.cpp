@@ -444,6 +444,18 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     LOG_INFO("engine: dump done, " + std::to_string(n) + " entities, " + std::to_string(shown) + " shown");
                     continue;
                 }
+                if (c.rfind("@slotdump", 0) == 0) {  // "@slotdump [slot]": hex of the 0x70-byte net_player
+                    int slot = 1;
+                    sscanf_s(c.c_str() + 9, "%d", &slot);
+                    std::string h = "engine: slot " + std::to_string(slot) + ":";
+                    if (g_players && slot >= 0 && slot < g_players->size) {
+                        uint8_t* p = (uint8_t*)g_players->array + slot * 0x70;
+                        char x[4];
+                        for (int i = 0; i < 0x70; ++i) { snprintf(x, sizeof(x), "%s%02X", i % 8 ? "" : " ", p[i]); h += x; }
+                    }
+                    LOG_INFO(h);
+                    continue;
+                }
                 if (c.rfind("@respawn", 0) == 0) {
                     // "@respawn [slot]" (host): spawn a new body onto the still-linked slot (link_actor in the spawn
                     // event re-links it). Not the engine's slot reset (RVA 0x6B8E30): that makes the client reload
@@ -566,8 +578,8 @@ void engine_tick() {
     static uint8_t* last_ctl = nullptr;
     uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA
     uint8_t* ctl = lvl ? *(uint8_t**)(lvl + 0x38) : nullptr;
-    if (ctl && last_ctl && ctl != last_ctl && *(int32_t*)((uint8_t*)GetModuleHandleA(nullptr) + 0xFD5028) > 0)
-        engine_exec("@goto s0 2.5");
+    int local = *(int32_t*)((uint8_t*)GetModuleHandleA(nullptr) + 0xFD5028);  // net_core local slot index
+    if (ctl && last_ctl && ctl != last_ctl && local > 0) engine_exec("@goto s0 2.5");
     if (ctl) last_ctl = ctl;
     // Host: respawn a joiner whose body died (health float entity+0x308 <= 0), 5 s after death.
     // shortcut: fixed 5 s, respawns on the host's spot; upgrade with a respawn point / delay setting.
