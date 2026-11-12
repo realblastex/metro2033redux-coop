@@ -28,7 +28,8 @@ What does not work yet:
 - No AI, door or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only
   over loopback.
 
-QA level: manual bot runs (scripted, log-checked). There is no automated suite yet.
+QA level: manual bot runs (scripted, log-checked). There is no automated suite yet. Longest run: ~4 min of co-op,
+24 moves, both alive, final positions equal on both sides.
 
 Verified test run (log lines from `metro_coop.log`, host then client):
 

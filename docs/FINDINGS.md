@@ -23,6 +23,8 @@ yet exercised, **unknown** = not found yet.
 - Both bodies spawn on the same spot. `@teleport 1 0 0` on the client (after its body appeared) moved it 1 m
   (x -7.3 to -6.3), and the host got the new position (verified 10:02). The transform is a 4×4 matrix at
   entity+0xC0 (translation at +0xF0); set_transform = entity vtbl+0x190(&m, 0).
+- Soak run (verified 10:16–10:21): ~4 min of co-op, host 12 and client 12 forward/back moves. Both stayed alive (no
+  event-1000 crash). At the end both sides show the same positions: s0 (-4.8,-2.6,-16.0), s1 (-5.6,-2.6,-16.1).
 - **Next problems:** combat (damage between players, NPCs targeting the client), AI, doors and story events are not
   checked. Level transitions, save/load and LAN are not tested.
 
