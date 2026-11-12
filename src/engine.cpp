@@ -83,6 +83,10 @@ void engine_wait_log(const std::string& text) {
 }
 bool engine_wait_log_hit() { return g_wait_hit; }
 
+// Count of "loader_finish: mapstate_running" lines = level starts since injection (the main menu is one too).
+static std::atomic<int> g_level_starts{0};
+int engine_level_starts() { return g_level_starts; }
+
 // Name of an entity (+0x110 -> string object, chars at +0x14); "?" if unreadable. Diagnostics only.
 static const char* entity_name(uint8_t* e) {
     __try {
@@ -102,6 +106,7 @@ static uint8_t* entity_by_id(unsigned id) {
 }
 
 static void __fastcall slog_hook(const char* s) {
+    if (s && strstr(s, "loader_finish: mapstate_running")) ++g_level_starts;
     if (s && !g_wait_hit) {
         std::lock_guard<std::mutex> lock(g_wait_mutex);
         if (!g_wait_text.empty() && strstr(s, g_wait_text.c_str())) g_wait_hit = true;

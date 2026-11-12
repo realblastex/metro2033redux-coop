@@ -1,8 +1,10 @@
 # Two-instance smoke test with pass/fail checks (no human needed). Uses the fast-start save (see README).
-# usage: smoke_test.ps1 [-Save coop_start] [-Wait 105] [-Respawn]
+# usage: smoke_test.ps1 [-Save coop_start] [-Wait 105] [-Respawn] [-Launcher]
+# -Launcher: start both through MetroCoopLauncher.exe; the DLL hosts/joins by itself (mode in the ini). The client
+# doesn't walk then (no check needs it).
 # -Respawn (needs an armed save, e.g. -Save coop_l19): the host also shoots the client's body and the checks include
 # the automatic respawn. Needs $env:METRO_HOST_DIR / $env:METRO_CLIENT_DIR like run_test.ps1. Exit code 0 = all passed.
-param([string]$Save = 'coop_start', [int]$Wait = 105, [switch]$Respawn)
+param([string]$Save = 'coop_start', [int]$Wait = 105, [switch]$Respawn, [switch]$Launcher)
 $ErrorActionPreference = 'Stop'
 $start = Get-Date
 $boot = "@wait_log playing video 30;@wait 1;@pad 1000 0 0 200;@wait 2;@pad 0010 0 0 200;@wait 2;@pad 1000 0 0 200;@wait 2;" +
@@ -11,11 +13,17 @@ $boot = "@wait_log playing video 30;@wait 1;@pad 1000 0 0 200;@wait 2;@pad 0010 
 # -Respawn: ~25 s after the strafe the host turns to slot 1's body and fires 3 s; the host respawns it 5 s after death
 $kill = if ($Respawn) { ";@wait 20;@aim s1 3000;@wait 4;@pad 0 0 0 3000 0 0 0 255" } else { "" }
 if ($Respawn -and $Wait -lt 150) { $Wait = 150 }
-& "$PSScriptRoot\set_ini.ps1" host "exec_on_start=$boot;@host;@wait 40;@pad 0 -32000 0 2000$kill;@wait 60" exec_delay_s=0 | Out-Null
-& "$PSScriptRoot\set_ini.ps1" client "exec_on_start=@wait_log playing video 30;@wait 20;@join 127.0.0.1;@wait 25;@pad 0 0 -32000 2000;@wait 60" exec_delay_s=0 engine_bind_port=1001 | Out-Null
-& "$PSScriptRoot\run_test.ps1" -Client -Wait $Wait -Tail 0 | Out-Null
+if ($Launcher) {  # the launcher sets mode / join_address / engine_bind_port; the DLL inserts @host after the load
+    & "$PSScriptRoot\set_ini.ps1" host "exec_on_start=$boot;@wait 55;@pad 0 -32000 0 2000$kill;@wait 60" exec_delay_s=0 | Out-Null
+    # client presses A / START / A at the title screen like a player; the menu then starts and the DLL joins
+    & "$PSScriptRoot\set_ini.ps1" client "exec_on_start=@wait_log playing video 30;@wait 1;@pad 1000 0 0 200;@wait 2;@pad 0010 0 0 200;@wait 2;@pad 1000 0 0 200" exec_delay_s=0 | Out-Null
+} else {
+    & "$PSScriptRoot\set_ini.ps1" host "exec_on_start=$boot;@host;@wait 40;@pad 0 -32000 0 2000$kill;@wait 60" exec_delay_s=0 mode= | Out-Null
+    & "$PSScriptRoot\set_ini.ps1" client "exec_on_start=@wait_log playing video 30;@wait 20;@join 127.0.0.1;@wait 25;@pad 0 0 -32000 2000;@wait 60" exec_delay_s=0 engine_bind_port=1001 mode= | Out-Null
+}
+& "$PSScriptRoot\run_test.ps1" -Client -Launcher:$Launcher -Wait $Wait -Tail 0 | Out-Null
 
-function LogDir($install) { "$env:LOCALAPPDATA\MetroCoop\" + ((Split-Path $install -Leaf) -replace '[^A-Za-z0-9_-]', '_') }
+function LogDir($install) { "$install\metro_coop" }  # mod folder: DLL, launcher, ini, logs
 function Slots($line) {  # heartbeat "sN=<id>/<state>/(x,y,z)" -> @{N = @{id; st; x; y; z}}
     $r = @{}
     foreach ($m in [regex]::Matches($line, 's(\d)=([0-9A-F]+)/(\d)/\(([-\d.]+),([-\d.]+),([-\d.]+)\)')) {

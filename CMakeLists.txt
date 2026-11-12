@@ -13,7 +13,10 @@ target_include_directories(minhook PUBLIC third_party/minhook)
 
 # The DLL injected into metro.exe
 add_library(metro_coop SHARED src/dllmain.cpp src/engine.cpp src/logger.cpp)
-target_link_libraries(metro_coop PRIVATE minhook shell32 user32)
+target_link_libraries(metro_coop PRIVATE minhook user32)
 
 # Launches metro.exe with the single-instance check patched in memory, and injects the DLL
 add_executable(injector injector/injector.cpp)
+
+# Host/Join window for players; goes into <game dir>\metro_coop\ next to metro_coop.dll
+add_executable(MetroCoopLauncher WIN32 injector/launcher.cpp)

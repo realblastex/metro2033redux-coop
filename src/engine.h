@@ -28,6 +28,9 @@ std::string engine_stats();
 void engine_wait_log(const std::string& text);
 bool engine_wait_log_hit();
 
+// Level starts seen since engine_init ("loader_finish: mapstate_running"; the main menu counts as one).
+int engine_level_starts();
+
 // Changes the engine's local ENet bind port (default 1000). Needed for a second instance on the same PC.
 bool engine_set_bind_port(uint16_t port);
 

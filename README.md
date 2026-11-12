@@ -7,11 +7,15 @@ level with two players.
 This repo holds the **clean source** and the **findings**. It is the project link for this game's entry in the
 coop-anything directory. Game files are not included and never will be.
 
-## Status (2026-11-12)
+## Status (2026-11-13)
 
 What works:
 
-- Two game instances run on one PC. The second instance is allowed by `injector --launch`.
+- Two game instances run on one PC. The second instance is allowed by `injector --launch` (the launcher does the same).
+- `MetroCoopLauncher.exe` (in `<game dir>\metro_coop\`) has **Host** and **Join <IP>** buttons. Host: load a save or
+  start a new game, and the game hosts by itself once the level is loaded. Join: the game joins from the main menu by
+  itself. Verified on one PC with `scripts\smoke_test.ps1 -Launcher` (PASS, 8 checks).
+- All mod files (DLL, launcher, `metro_coop.ini`, logs) live in `<game dir>\metro_coop\`, nothing in AppData.
 - The host turns a running single-player level into a network game. The client connects, loads the host's level
   from the host's quick save, and both stay in gameplay.
 - The host's player character is linked to network slot 0. The host's movement replicates to the client.
@@ -46,7 +50,8 @@ QA level: automated smoke test. `scripts\smoke_test.ps1 [-Save coop_start|coop_l
 checks 8 facts from the logs (both alive, no crash, body spawned and linked, client controls it, both movements seen,
 positions equal on both sides); `-Respawn` adds a kill of the client by the host and checks the automatic respawn
 (10 checks). Last runs: Hunter and `l19_defence` `RESULT: PASS (8 checks)`, `l19_defence -Respawn`
-`RESULT: PASS (10 checks)`. Longest manual run: ~4 min of
+`RESULT: PASS (10 checks)`. `-Launcher` starts both copies through `MetroCoopLauncher.exe` instead (auto host/join, same 8 checks,
+`RESULT: PASS (8 checks)`). Longest manual run: ~4 min of
 co-op, 24 moves, both alive, final positions equal on both sides.
 
 Verified test run (log lines from `metro_coop.log`, host then client):
@@ -87,7 +92,24 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
-Output: `build\Release\metro_coop.dll` and `build\Release\injector.exe`.
+Output: `build\Release\metro_coop.dll`, `build\Release\MetroCoopLauncher.exe` and `build\Release\injector.exe`.
+
+## Install and play
+
+1. Make a folder `metro_coop` inside the game folder (the one with `metro.exe`). Copy `metro_coop.dll` and
+   `MetroCoopLauncher.exe` into it. The game folder must be writable: the mod keeps `metro_coop.ini` and its logs
+   there.
+2. Host: run `MetroCoopLauncher.exe`, click **Host a game**, then load a save or start a new game. About 2 s after the
+   level has loaded, the window title changes to `Metro Redux [host]`. Allow `metro.exe` in Windows Firewall
+   (UDP port 1000) when Windows asks.
+3. Friend: run `MetroCoopLauncher.exe`, type the host's IP address, click **Join**. Press a key at the title screen.
+   The game joins once the menu is up (or 25 s after start), loads the host's level and gets its own body about
+   15 s later. If joining fails, press **F11** in the menu to retry.
+4. Two copies on one PC (testing): tick **Second copy on this PC** for the joining copy, and join `127.0.0.1`.
+
+The launcher needs the unpacked `metro.exe` described under "Game identity". LAN and Internet play are **not tested
+yet**; only two copies on one PC are. Older builds kept their files in `%LOCALAPPDATA%\MetroCoop\`; that folder is
+no longer used and can be deleted.
 
 ## Run a two-instance test on one PC
 
@@ -113,7 +135,8 @@ Output: `build\Release\metro_coop.dll` and `build\Release\injector.exe`.
    ```
    The host spawns the client's body by itself 15 s after the client connects (`auto_spawn_s`). The host walks
    forward and later turns around; its screenshot then shows the client's body.
-5. Check the heartbeat lines. Per instance, logs are in `%LOCALAPPDATA%\MetroCoop\<game folder name>\`:
+5. Check the heartbeat lines. Per instance, logs are in `<game copy>\metro_coop\` (`run_test.ps1` copies the
+   build there):
    `metro_coop.log` (ours) and `engine.log` (every engine log line).
 
 Windows Firewall asks about network access the first time `metro.exe` binds UDP port 1000. Loopback works without
@@ -121,8 +144,8 @@ allowing it. LAN play will need it allowed.
 
 ## Try it by hand (two copies on one PC)
 
-1. Start both copies with `injector --launch` and inject the DLL (as `scripts\run_test.ps1` does). Set
-   `engine_bind_port = 1001` in the second copy's `metro_coop.ini`.
+1. Start both copies with `injector --launch` and inject the DLL (as `scripts\run_test.ps1` does), or use the
+   launcher. Set `engine_bind_port = 1001` in the second copy's `metro_coop.ini`.
 2. Copy 1: load a save (or start a new game) and wait until you are in gameplay. Press **F9**: it becomes the host.
 3. Copy 2: at the main menu press **F11**: it joins `join_address` (default `127.0.0.1`), loads the host's level and
    gets its own body about 15 s later.
@@ -137,13 +160,16 @@ Two PCs on a LAN (**not tested yet**): both PCs need the game, the DLL and the i
 
 ## Config: `metro_coop.ini`
 
+In `<game dir>\metro_coop\`, next to the DLL. Created with defaults on first run.
+
 | key | default | meaning |
 |---|---|---|
 | `exec_on_start` | empty | `;`-separated engine console commands and `@`-commands, run in order |
 | `exec_delay_s` | 5 | seconds after injection before `exec_on_start` starts |
 | `keep_active` | true | keep running while the window is unfocused |
 | `engine_bind_port` | 0 | engine UDP port (0 = 1000); use 1001 for a second instance on the same PC |
-| `join_address` | 127.0.0.1 | host address for F11 |
+| `join_address` | 127.0.0.1 | host address for F11 and the launcher's Join |
+| `mode` | empty | written by the launcher: `host` = host at the first level start after the menu; `join` = join `join_address` once the menu is up or 25 s after start; empty = only `exec_on_start` and F9/F11 |
 | `auto_spawn_s` | 15 | host: spawn a body for a joining player this many seconds after it connects (0 = off) |
 
 `@`-commands:
@@ -183,7 +209,7 @@ Useful engine console commands: `disconnect`, `server`, `map 2033\l01_hunter`, `
 |---|---|
 | `src/engine.cpp` | all engine hooks and `@`-commands, with the RVAs and offsets they rely on |
 | `src/dllmain.cpp` | config, logs, the `exec_on_start` runner, the heartbeat |
-| `injector/` | `injector --launch <metro.exe>` (single-instance patch) and `injector <exe> <dll>` (inject) |
+| `injector/` | `injector --launch <metro.exe>` (single-instance patch), `injector <exe> <dll>` (inject), and `launcher.cpp` = `MetroCoopLauncher.exe` (Host / Join window; `--host`, `--join <ip> [--second]` for scripts) |
 | `scripts/` | test runner, ini helper, screenshots |
 | `tools/re/` | static analysis helpers for the exe (Python + capstone): disassembly, strings, xrefs, callers, memory writers |
 | `docs/FINDINGS.md` | everything learned about the engine, with RVAs, verified results and next steps |

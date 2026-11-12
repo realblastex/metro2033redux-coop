@@ -1,12 +1,11 @@
 // metro_coop.dll entry point. Loads the per-install config, starts our log + the engine log capture, installs the
 // engine hooks (engine.cpp), then runs a 16 ms loop that executes `exec_on_start` and logs a heartbeat every ~10 s.
 //
-// Per-install folder: %LOCALAPPDATA%\MetroCoop\<name of the folder that holds metro.exe>\
-//   metro_coop.ini  config (created with defaults on first run)
+// Mod folder = the folder that holds metro_coop.dll (normally <game dir>\metro_coop\):
+//   metro_coop.ini  config (created with defaults on first run; the launcher writes mode/join_address/engine_bind_port)
 //   metro_coop.log  our log (heartbeat, @-command results)
 //   engine.log      every line the engine logs, timestamped
 #include <windows.h>
-#include <shlobj.h>
 #include <atomic>
 #include <cstdint>
 #include <fstream>
@@ -25,6 +24,8 @@ struct Config {
     uint16_t engine_bind_port = 0;  // 0 = engine default 1000; e.g. 1001 for a second instance on the same PC
     uint32_t auto_spawn_s = 15;     // host: spawn a body for a joining player this many seconds after it connects (0 = off)
     std::string join_address = "127.0.0.1";  // F11 joins this host
+    std::string mode;               // set by the launcher: "host" = host once a level is loaded, "join" = join join_address
+                                    // once the main menu is up; empty = only exec_on_start and the F9/F11 hotkeys
 };
 
 static std::string trim(const std::string& s) {
@@ -38,8 +39,10 @@ static Config load_config(const std::string& path) {
     std::ifstream in(path);
     if (!in) {
         std::ofstream out(path);
-        out << "; Metro 2033 Redux co-op - see README for exec_on_start commands\n"
-               "exec_on_start = \nexec_delay_s = 5\nkeep_active = true\nengine_bind_port = 0\nauto_spawn_s = 15\njoin_address = 127.0.0.1\n";
+        // [coop] lets the launcher use Get/WritePrivateProfileString; load_config skips the section line (no '=')
+        out << "[coop]\n; Metro 2033 Redux co-op - see README for exec_on_start commands\n"
+               "exec_on_start = \nexec_delay_s = 5\nkeep_active = true\nengine_bind_port = 0\nauto_spawn_s = 15\n"
+               "join_address = 127.0.0.1\nmode = \n";
         return c;
     }
     for (std::string line; std::getline(in, line);) {
@@ -53,6 +56,7 @@ static Config load_config(const std::string& path) {
         else if (k == "engine_bind_port") c.engine_bind_port = (uint16_t)strtoul(v.c_str(), nullptr, 0);
         else if (k == "auto_spawn_s") c.auto_spawn_s = (uint32_t)strtoul(v.c_str(), nullptr, 0);
         else if (k == "join_address") c.join_address = v;
+        else if (k == "mode") c.mode = v;
     }
     return c;
 }
@@ -122,6 +126,12 @@ public:
         }
     }
 
+    // runs right after the command in progress (a running @wait / @wait_log finishes first)
+    void insert_next(const std::string& c) {
+        if (pos_ > cmds_.size()) pos_ = cmds_.size();
+        cmds_.insert(pos_, c + ";");
+    }
+
     // runs after whatever is still queued (hotkeys)
     void push(const std::string& c) {
         if (pos_ > cmds_.size()) pos_ = cmds_.size();
@@ -135,21 +145,15 @@ private:
     uint64_t next_ms_, wait_deadline_ = 0, next_press_ = 0;
 };
 
+static HMODULE g_module = nullptr;
+
+// Folder of metro_coop.dll, with a trailing backslash: config and logs live next to the DLL (in the game folder).
 static std::string instance_dir() {
-    char exe[MAX_PATH] = {}, appdata[MAX_PATH] = {};
-    GetModuleFileNameA(nullptr, exe, MAX_PATH);
-    std::string dir(exe);
-    dir.resize(dir.find_last_of("\\/") == std::string::npos ? 0 : dir.find_last_of("\\/"));
-    std::string name = dir.substr(dir.find_last_of("\\/") + 1);
-    for (char& ch : name)
-        if (!isalnum((unsigned char)ch) && ch != '_' && ch != '-') ch = '_';
-    if (name.empty()) name = "metro";
-    // shortcut: two installs in folders with the same name share one config dir; rename a folder if that happens
-    if (FAILED(SHGetFolderPathA(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, appdata))) return ".\\";
-    std::string root = std::string(appdata) + "\\MetroCoop";
-    CreateDirectoryA(root.c_str(), nullptr);
-    CreateDirectoryA((root + "\\" + name).c_str(), nullptr);
-    return root + "\\" + name + "\\";
+    char dll[MAX_PATH] = {};
+    GetModuleFileNameA(g_module, dll, MAX_PATH);
+    std::string dir(dll);
+    size_t slash = dir.find_last_of("\\/");
+    return slash == std::string::npos ? ".\\" : dir.substr(0, slash + 1);
 }
 
 static DWORD WINAPI main_thread(LPVOID) {
@@ -171,6 +175,11 @@ static DWORD WINAPI main_thread(LPVOID) {
     engine_set_auto_spawn(cfg.auto_spawn_s);
 
     ExecRunner exec(cfg);
+    // shortcut: "host at the first level start after the menu" assumes injection before the menu loads (the launcher
+    // injects ~3 s after launch, the menu comes ~14 s later); if injection is late, press F9 in the level
+    bool auto_done = cfg.mode != "host" && cfg.mode != "join";
+    if (!auto_done) LOG_INFO("mode: " + cfg.mode);
+    uint64_t start_ms = GetTickCount64();
     g_running = true;
     for (uint64_t tick = 1; g_running; ++tick) {
         // F9 = host (on a loaded single-player level), F11 = join join_address (F10 hung the client during connect: the game uses it); only while our window is in front
@@ -183,6 +192,14 @@ static DWORD WINAPI main_thread(LPVOID) {
         if (k9 && !f9) { LOG_INFO("hotkey F9: host"); exec.push("@host"); }
         if (k11 && !f11) { LOG_INFO("hotkey F11: join " + cfg.join_address); exec.push("@join " + cfg.join_address); }
         f9 = k9; f11 = k11;
+        // the menu is the 1st level start, but only once someone presses a key at the title screen; joining from the
+        // title screen works too (smoke test), so "join" also fires after ~25 s
+        if (!auto_done && (engine_level_starts() >= (cfg.mode == "host" ? 2 : 1) ||
+                           (cfg.mode == "join" && GetTickCount64() - start_ms >= 25000))) {
+            auto_done = true;
+            LOG_INFO("auto " + cfg.mode);
+            exec.insert_next(cfg.mode == "host" ? "@wait 2;@unpause_all;@host" : "@wait 2;@join " + cfg.join_address);
+        }
         exec.tick();
         engine_tick();
         if (tick % 625 == 0) LOG_INFO("heartbeat: " + engine_stats());  // ~10 s; tests read state from here
@@ -196,6 +213,7 @@ static DWORD WINAPI main_thread(LPVOID) {
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(module);
+        metro_coop::g_module = module;
         // never do real work under the loader lock: start a thread instead
         if (HANDLE t = CreateThread(nullptr, 0, metro_coop::main_thread, nullptr, 0, nullptr)) CloseHandle(t);
     } else if (reason == DLL_PROCESS_DETACH) {
