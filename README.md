@@ -131,6 +131,10 @@ Verified 10:30 with key presses sent by a script (F9 on the host, F11 on the cli
 that copy's window is in front. F10 is not usable: the game itself reacts to it, and a join started with F10 hung the
 client.
 
+Two PCs on a LAN (**not tested yet**): both PCs need the game, the DLL and the injector. On the host PC allow
+`metro.exe` in Windows Firewall (UDP port 1000). On the client PC set `join_address = <host's LAN IP>` and leave
+`engine_bind_port = 0` (the 1001 trick is only for two copies on one PC). Then F9 on the host, F11 on the client.
+
 ## Config: `metro_coop.ini`
 
 | key | default | meaning |
