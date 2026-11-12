@@ -19,6 +19,8 @@ What works:
   from its own camera. The client walks its own body with its own input, and the host sees that body move.
 - Both instances are driven without a human. A fake XInput pad and console commands run from a config file.
 - Fast start takes about 30 s from launch to both players in-game.
+- A second, armed level works: on `l19_defence` both players get their own body and rifle, and the client can fire.
+  Three game crashes that assume one single player exist were guarded for this (FINDINGS 5.5).
 
 What does not work yet:
 
@@ -28,7 +30,8 @@ What does not work yet:
   within 15 s. An active monster moved on the host shows up on the client. Entities the host spawns (`@spawn`) exist on
   both sides with the same id.
 - The client's body has no knife (the torch is there). Doors are not in the network list; door use between players is
-  untested. Combat is untested (weapons are holstered at the start of Hunter, and a spawned monster stays asleep).
+  untested. Damage, enemy AI and monster fights are untested (Hunter starts unarmed; in `l19_defence` no monster
+  attacked within 2.5 min; a spawned monster stays asleep).
 - No AI or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only
   over loopback.
 
@@ -137,7 +140,7 @@ client.
 | `@wait <s>` | pause the list |
 | `@wait_log <text> [timeout_s]` | pause until an engine log line contains `<text>` (default 120 s) |
 | `@skip_video [timeout_s]` | press pad A every second until a video is skipped |
-| `@pad <buttons hex> <lx> <ly> <ms> [rx ry]` | fake XInput pad 0 (A=1000 B=2000 X=4000 Y=8000 START=0010); right stick turns the camera |
+| `@pad <buttons hex> <lx> <ly> <ms> [rx ry lt rt]` | fake XInput pad 0 (A=1000 B=2000 X=4000 Y=8000 START=0010); right stick turns the camera; triggers 0..255 (RT = fire) |
 | `@mp <0/1>` | set the engine's multiplayer flag |
 | `@finish_load` | finish a level load (same as the "press any key" after loading) |
 | `@unpause_all` | pop every engine pause (a pause left from startup freezes the game clock) |

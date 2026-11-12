@@ -306,7 +306,17 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         LOG_INFO("engine: net_host (net_core.host was " + std::to_string((uintptr_t)*host) + ")");
                         if ((uintptr_t)*host == 1) *host = nullptr;
                         *g_mp_flag = 1;
+                        uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA
+                        void* ctl_before = lvl ? *(void**)(lvl + 0x38) : nullptr;
                         g_net_start(nullptr, nullptr);
+                        // Link slot 0 to the SP player in the same frame: with the MP flag set, the controlled entity
+                        // *(g_level+0x38) goes null until slot 0 has an actor, and l19_defence crashed at RVA 0x361292
+                        // (reads it every frame) before a separate "@link_actor" ran (verified 13:53).
+                        if (ctl_before && g_link_actor && g_players->size > 0)
+                            g_link_actor((uint8_t*)g_players->array, *(uint16_t*)((uint8_t*)ctl_before + 0xA0 + 0x68));
+                        char b2[96];
+                        snprintf(b2, sizeof(b2), "engine: net_host ctl %p -> %p", ctl_before, lvl ? *(void**)(lvl + 0x38) : nullptr);
+                        LOG_INFO(b2);
                         // note: slot 0's actor link (+0x58 handle / +0x64 id) is empty (0xFFFF) both before and after,
                         // even in plain SP - the SP actor is not tied to a net_player (verified 05:05).
                     }
@@ -509,6 +519,41 @@ static uint64_t __fastcall spp_hook(uint32_t pid, void* props) {
     return g_spp_orig(pid, props);
 }
 
+// RVA 0x20D3A0 (int f(obj, id, _, use_player, flag)): with use_player != 0 it scales a value by a property of the
+// controlled entity *(g_level+0x38). It tests that entity for null but then dereferences it anyway, so it crashes at
+// RVA 0x20D44C while there is no controlled entity: the joining client during the qsave load of l19_defence
+// (verified 13:59), and MP-mode loads of l02 in session 3. Without an entity, call it with use_player = 0.
+using noplayer_t = int(__fastcall*)(void*, int, void*, int, char);
+static noplayer_t g_noplayer_orig = nullptr;
+static int __fastcall noplayer_hook(void* obj, int id, void* a3, int use_player, char flag) {
+    uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA
+    if (use_player && (!lvl || !*(void**)(lvl + 0x38))) use_player = 0;
+    return g_noplayer_orig(obj, id, a3, use_player, flag);
+}
+
+// RVA 0x360FD0: per-frame update of an entity that tracks the player (in l19_defence) reads *(g_level+0x38)+0xF0
+// without a null check (crash RVA 0x361292): on the host between net start and the slot-0 link, on the client until
+// its body spawns (verified 13:53 and 14:03). Skip the update while there is no controlled entity.
+using track_t = void(__fastcall*)(void*);
+static track_t g_track_orig = nullptr;
+static void __fastcall track_hook(void* e) {
+    uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA
+    if (lvl && *(void**)(lvl + 0x38)) g_track_orig(e);
+}
+
+// RVA 0x526AA0 binds the weapon HUD's slots (array at hud+0x108, 0xB8 bytes each, count u16 at +0x112) to ammo items.
+// When the inventory has no ammo item it logs "!No ammo item. Save level, bleat !!!" and leaves the slot's ammo-type
+// index (+0xA8) unset. The HUD draw (RVA 0x525F60) then indexes the weapon-type record's ammo table (record =
+// *(g_level+0x2A500) + type * 0x178, table at +0x98; type 23 of 26 seen) with it and crashed at RVA 0x5260D5 when the
+// client's cloned body fired in l19_defence (verified 14:05). Reset the index to 0 first so a failed bind stays safe.
+using ammo_bind_t = void(__fastcall*)(uint8_t*, void*, void*);
+static ammo_bind_t g_ammo_bind_orig = nullptr;
+static void __fastcall ammo_bind_hook(uint8_t* hud, void* a2, void* a3) {
+    for (unsigned i = 0; i < *(uint16_t*)(hud + 0x112); ++i)
+        *(int32_t*)(*(uint8_t**)(hud + 0x108) + i * 0xB8 + 0xA8) = 0;
+    g_ammo_bind_orig(hud, a2, a3);
+}
+
 using lookup_t = void*(__fastcall*)(void*, void***);
 static lookup_t g_lookup_orig = nullptr;
 static void* __fastcall lookup_hook(void* net_core, void*** handle) {
@@ -595,6 +640,21 @@ static bool install_player_slot_fix() {
         if (MH_CreateHook((LPVOID)*lk, (LPVOID)&lookup_hook, (LPVOID*)&g_lookup_orig) == MH_OK && MH_EnableHook((LPVOID)*lk) == MH_OK)
             LOG_INFO("engine: player lookup guard installed");
     } else LOG_ERROR("engine: player lookup pattern not found");
+    auto np = find("40 55 41 56 41 57 48 83 EC 30 45 33 F6 0F 29 74 24 20 F3 0F 10 35 ? ? ? ? 8B EA 4C 8B F9 45 85 C9");
+    if (np && MH_CreateHook((LPVOID)*np, (LPVOID)&noplayer_hook, (LPVOID*)&g_noplayer_orig) == MH_OK &&
+        MH_EnableHook((LPVOID)*np) == MH_OK)
+        LOG_INFO("engine: no-player guard installed");
+    else LOG_ERROR("engine: no-player guard pattern not found");
+    auto tr = find("40 57 48 81 EC A0 00 00 00 83 B9 44 08 00 00 00 48 8B F9 0F 84 ? ? ? ? 48 8B 81 D0 04 00 00");
+    if (tr && MH_CreateHook((LPVOID)*tr, (LPVOID)&track_hook, (LPVOID*)&g_track_orig) == MH_OK &&
+        MH_EnableHook((LPVOID)*tr) == MH_OK)
+        LOG_INFO("engine: player-tracker guard installed");
+    else LOG_ERROR("engine: player-tracker guard pattern not found");
+    auto ab = find("40 55 41 54 41 55 48 83 EC 40 0F B7 81 12 01 00 00 33 ED 48 89 51 10 4C 8B E9 4D 8B A0 70 0B 00 00");
+    if (ab && MH_CreateHook((LPVOID)*ab, (LPVOID)&ammo_bind_hook, (LPVOID*)&g_ammo_bind_orig) == MH_OK &&
+        MH_EnableHook((LPVOID)*ab) == MH_OK)
+        LOG_INFO("engine: ammo HUD guard installed");
+    else LOG_ERROR("engine: ammo HUD guard pattern not found");
     if (auto la = find("40 53 48 83 EC 20 48 8B D9 E8 ? ? ? ? 81 63 68 FF FF FD FF 81 4B 68 00 00 05 00"))
         g_link_actor = (link_actor_t)*la;
     LOG_INFO(std::string("engine: link_actor ") + (g_link_actor ? "found" : "NOT FOUND"));
@@ -686,14 +746,14 @@ static xgs_t g_xgs_orig = nullptr;
 static DWORD WINAPI xgs_hook(DWORD user, void* state) {
     if (user == 0 && g_pad_on && state) {
         std::lock_guard<std::mutex> lock(g_pad_mutex);
-        if (GetTickCount64() >= g_pad_until) { g_pad.buttons = 0; g_pad.lx = g_pad.ly = g_pad.rx = g_pad.ry = 0; }
+        if (GetTickCount64() >= g_pad_until) { g_pad.buttons = 0; g_pad.lx = g_pad.ly = g_pad.rx = g_pad.ry = 0; g_pad.lt = g_pad.rt = 0; }
         ++g_pad.packet;
         memcpy(state, &g_pad, sizeof(g_pad));
         return ERROR_SUCCESS;
     }
     return g_xgs_orig(user, state);
 }
-static void pad_command(const std::string& args) {  // "<buttons hex> <lx> <ly> <ms>" (sticks -32768..32767)
+static void pad_command(const std::string& args) {  // "<buttons hex> <lx> <ly> <ms> [rx ry lt rt]" (sticks -32768..32767)
     if (!g_xgs_orig) {
         HMODULE x = LoadLibraryA("xinput1_3.dll");
         LPVOID f = x ? (LPVOID)GetProcAddress(x, (LPCSTR)2) : nullptr;
@@ -702,10 +762,11 @@ static void pad_command(const std::string& args) {  // "<buttons hex> <lx> <ly> 
             return;
         }
     }
-    unsigned b = 0; int lx = 0, ly = 0, ms = 0, rx = 0, ry = 0;  // right stick optional (camera turn)
-    sscanf_s(args.c_str(), "%x %d %d %d %d %d", &b, &lx, &ly, &ms, &rx, &ry);
+    unsigned b = 0; int lx = 0, ly = 0, ms = 0, rx = 0, ry = 0, lt = 0, rt = 0;  // optional: right stick, triggers 0..255
+    sscanf_s(args.c_str(), "%x %d %d %d %d %d %d %d", &b, &lx, &ly, &ms, &rx, &ry, &lt, &rt);
     std::lock_guard<std::mutex> lock(g_pad_mutex);
     g_pad.buttons = (uint16_t)b; g_pad.lx = (int16_t)lx; g_pad.ly = (int16_t)ly; g_pad.rx = (int16_t)rx; g_pad.ry = (int16_t)ry;
+    g_pad.lt = (uint8_t)lt; g_pad.rt = (uint8_t)rt;
     g_pad_until = GetTickCount64() + ms;
     g_pad_on = true;
     LOG_INFO("engine: pad buttons=0x" + args);

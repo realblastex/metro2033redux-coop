@@ -52,6 +52,8 @@ yet exercised, **unknown** = not found yet.
   (`!too many network synch entities`). Runtime registration (derived): the activate/deactivate update RVA 0x6D6DA0
   calls make-relevant when an entity becomes active and unregisters it (RVA 0x747CA0) when it goes inactive; the
   attach/detach path RVA 0x6DD360 does the same. The client's 12 extra entries are dormant: see 5.4.
+- Second level works (verified 14:13–14:20): on `l19_defence` both players spawn armed and the client can fire its
+  weapon, after three single-player-assumption crashes were guarded (5.5).
 - **Next problems:** combat (damage between players, NPCs targeting the client), AI, doors and story events are not
   checked. Level transitions, save/load and LAN are not tested.
 
@@ -223,6 +225,28 @@ Verified (two-instance runs 13:25–13:45):
   `entity_players_knife: player is absent`.
 - Combat is not testable from the fast-start save: weapons are holstered in the station (`take_item
   [unarmed_box]`), and no monster attacks early in Hunter.
+
+### 5.5 Armed test level: l19_defence (session 6)
+
+`disconnect;server;map 2033\l19_defence` from the menu (SP) starts the player armed (assault rifle) in a tunnel at
+x≈225. A save made 8 s in with the console command `gamesave coop_l19` (written as `2033_coop_l19`, 716 KB) loads
+with `gameload coop_l19` like `coop_start`. Three crashes had to be fixed before two players got into it; all three
+are game code that assumes a single player always exists (fixes in `src/engine.cpp`, verified 14:03–14:20):
+
+| crash RVA | where | cause | fix |
+|---|---|---|---|
+| 0x361292 (host, then client) | per-frame update RVA 0x360FD0 of an entity that tracks the player | reads `*(g_level+0x38)+0xF0` with no null check. The host's controlled entity goes null after net start until slot 0 has an actor (`@link_actor` ran 1 s later); the client has none until its body spawns | `@net_host` links slot 0 in the same frame; hook skips RVA 0x360FD0 while there is no controlled entity |
+| 0x20D44C (client, qsave load) | RVA 0x20D3A0 `int f(obj, id, _, use_player, flag)` | tests the controlled entity for null, then dereferences it anyway (same crash as session 3's MP-mode l02 load) | hook passes `use_player = 0` while there is no controlled entity |
+| 0x5260D5 (client, when its body fired) | weapon HUD draw RVA 0x525F60 | HUD slot bind RVA 0x526AA0 logs `!No ammo item. Save level, bleat !!!` and leaves the slot's ammo-type index (+0xA8) unset; the draw indexes the weapon-type ammo table (`*(g_level+0x2A500) + type*0x178`, table at +0x98; type 23 of 26) with garbage | hook zeroes each slot's +0xA8 before the bind |
+
+Results (verified):
+- Host and client both in l19 with their own bodies (client body 0x167, `s1=167/5` on both). Both fired with RT
+  (`@pad 0 0 0 4000 0 0 0 255`); the client's screenshot shows its own muzzle flash. Both alive for ~2.5 min.
+- The host networks 43 entities (humans: diggers, traders, kids, …), the client 69. The client's extra 26 are
+  lurkers (`lurker_*`, `lur_*`, `nosach*`), all dormant on both sides (f=0x67, b6=0) and 150+ m away. No monster
+  attacked within 2.5 min; walking forward ran into a wall after ~4 m.
+- Unknown: whether the host sees the client's shots (sound/flash/damage), damage between players, AI targeting the
+  client. The client still logs `No ammo item` (7 times before the guard), so its ammo count is probably not real.
 
 ### 5.3 Older notes (static, before the run)
 
