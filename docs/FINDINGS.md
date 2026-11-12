@@ -266,8 +266,15 @@ Results (verified):
   as `player_map` in 5.4). Fix: the `@join` macro now waits for the body (`[net] pid==`) and runs
   `@goto s0 1.2` (1.2 m in front of the host). After it the client screenshot shows one gun (l19), and Hunter
   places the client at x -6.1 next to the host at -7.3.
-- The remote body's active weapon is not synced: the host draws the client's body holding the machete (0x2D12)
-  while the client holds its AK (host screenshot `evidence/s6_offset`).
+- The host draws the client's body wrong: a large bare arm holding a blade fills the view 1.1 m in front of the host,
+  while the client holds its AK (host screenshot `evidence/s6_offset`). The clone's machete (0x2D12) carries the
+  remote-held flag there. Guess: the host renders the clone's first-person hands rig (`players_hands` copy) at the
+  client's camera.
+- Player entity state (derived, vtable RVA 0xA81F08): write = vtbl+0x180 → RVA 0x27C040 (base actor state RVA
+  0x1E1390, then one byte from the inventory `*(e+0xB70)` vtbl+0x300(inv, &b), then u16 e+0x18A0). Read = vtbl+0x188
+  → RVA 0x1CBEB4 → RVA 0x27BF20 (u16 to e+0x18A2, byte to e+0x18A4, then inventory vtbl+0x2F8(inv, &b)). The client
+  never sends this state for its body (it sends only msg 0), so the host never gets the client's weapon byte. A test
+  copying the host player's byte (16) into the clone with vtbl+0x2F8 changed nothing visible (reverted).
 - Unknown: sound, AI targeting the client. The client still logs `No ammo item` (7 times before the guard), so its ammo count is probably not real.
 
 ### 5.3 Older notes (static, before the run)

@@ -29,7 +29,8 @@ What does not work yet:
 
 - Both bodies spawn on the same spot; `@join` then moves the client 1.2 m in front of the host. A wall there would
   block that. See [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
-- The other player's weapon is drawn wrong: the host sees the client holding a machete while the client holds its AK.
+- The host draws the client's body wrong: up close it shows a big bare arm with a blade, while the client holds its
+  AK. The client's weapon choice never reaches the host.
 - NPCs near the players replicate from the host (distance priority, ~128 bytes per packet); far NPCs did not update
   within 15 s. An active monster moved on the host shows up on the client. Entities the host spawns (`@spawn`) exist on
   both sides with the same id.
