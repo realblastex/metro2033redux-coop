@@ -27,13 +27,13 @@ What works:
 
 What does not work yet:
 
-- Both bodies spawn on the same spot; the client moves itself away with `@teleport`. See
-  [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
+- Both bodies spawn on the same spot; `@join` then moves the client 1.2 m in front of the host. A wall there would
+  block that. See [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
+- The other player's weapon is drawn wrong: the host sees the client holding a machete while the client holds its AK.
 - NPCs near the players replicate from the host (distance priority, ~128 bytes per packet); far NPCs did not update
   within 15 s. An active monster moved on the host shows up on the client. Entities the host spawns (`@spawn`) exist on
   both sides with the same id.
-- The client's body has no knife (the torch is there). The client was seen holding two guns at once (pistol and AK).
-  Death and respawn of a player are not handled. Doors are not in the network list; door use between players is
+- The client's body has no knife (the torch is there). Death and respawn of a player are not handled. Doors are not in the network list; door use between players is
   untested. Damage, enemy AI and monster fights are untested (Hunter starts unarmed; in `l19_defence` no monster
   attacked within 2.5 min; a spawned monster stays asleep).
 - No AI or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only

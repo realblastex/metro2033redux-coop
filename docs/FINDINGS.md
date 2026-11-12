@@ -258,10 +258,16 @@ Results (verified):
   `@aim 167 4000` (new: closed-loop right-stick yaw toward an entity; error 0.01 rad) and fired 3 s. The client's
   body 0x167 went from h=1.000 to h=-1.000 on **both** host and client (dead), the host stayed at 1.000. Both
   processes stayed alive. Respawn/death handling for the client is untested.
-- Weapon display bug (seen by the owner in one window, probably the client; also in a client screenshot taken after
-  its death, `evidence/s6_aim2/1`): the character holds two guns at once, a pistol and an AK. Guess: the clone copies
-  every weapon child of `player`, and the active-slot/visibility state is not set or replicated for it. A living
-  client frame was inconclusive.
+- Two-guns bug (seen by the owner on the client): the client's view showed a pistol and an AK at once. Cause
+  (derived, fix verified 14:55): both bodies spawned on one spot, so the host's body and its active AK sat inside
+  the client's camera. Weapon dump (`@dump wpn_`, l19): each body has its own set (host originals f=1, clone
+  copies f=0x10000; AK, revolver, dagger, machete, grenades). On each side the **other** player's active item has
+  flag 0x100 and b6=1 (client: host's AK 0x720A f=0x101; host: the clone's machete 0x2D12 f=0x10100; same pattern
+  as `player_map` in 5.4). Fix: the `@join` macro now waits for the body (`[net] pid==`) and runs
+  `@goto s0 1.2` (1.2 m in front of the host). After it the client screenshot shows one gun (l19), and Hunter
+  places the client at x -6.1 next to the host at -7.3.
+- The remote body's active weapon is not synced: the host draws the client's body holding the machete (0x2D12)
+  while the client holds its AK (host screenshot `evidence/s6_offset`).
 - Unknown: sound, AI targeting the client. The client still logs `No ammo item` (7 times before the guard), so its ammo count is probably not real.
 
 ### 5.3 Older notes (static, before the run)

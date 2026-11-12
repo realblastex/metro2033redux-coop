@@ -89,7 +89,11 @@ public:
             if (c == "@host") macro = "@title Metro Redux [host];@net_host;@wait 1;@players 1;@link_actor";
             else if (c.rfind("@join ", 0) == 0)
                 macro = "@title Metro Redux [client];connect " + trim(c.substr(6)) +
-                        ";@wait_log mapstate_loaded_and_waiting 60;@mp 1;@wait 1;@finish_load;@wait 1;@unpause_all";
+                        ";@wait_log mapstate_loaded_and_waiting 60;@mp 1;@wait 1;@finish_load;@wait 1;@unpause_all"
+                        // both bodies spawn on one spot (the client then sees the host's gun inside its own view):
+                        // once our body arrives, step 1.2 m in front of the host (open in Hunter and l19; behind the
+                        // Hunter start is a wall)
+                        ";@wait_log pid== 60;@wait 1;@goto s0 1.2";
             if (!macro.empty()) {
                 if (pos_ > cmds_.size()) pos_ = cmds_.size();  // macro was the last command
                 cmds_.insert(pos_, macro + ";");

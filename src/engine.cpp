@@ -440,10 +440,15 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     continue;
                 }
                 if (c.rfind("@goto ", 0) == 0) {
-                    // "@goto <id hex> <dist>": put the controlled entity <dist> m in front of entity <id>, facing it.
+                    // "@goto <id hex|s<slot>> <dist>": put the controlled entity <dist> m in front of entity <id>.
                     // Guess: matrix rows at +0xC0 right, +0xD0 up, +0xE0 forward, +0xF0 position.
-                    unsigned id = 0xFFFF; float dist = 2;
-                    sscanf_s(c.c_str() + 6, "%x %f", &id, &dist);
+                    // "s<slot>" instead of an id = that net slot's actor (+0x64)
+                    unsigned id = 0xFFFF; float dist = 2; int slot = -1;
+                    if (c[6] == 's') {
+                        sscanf_s(c.c_str() + 7, "%d %f", &slot, &dist);
+                        if (g_players && slot >= 0 && slot < g_players->size)
+                            id = *(uint16_t*)((uint8_t*)g_players->array + slot * 0x70 + 0x64);
+                    } else sscanf_s(c.c_str() + 6, "%x %f", &id, &dist);
                     uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA
                     uint8_t* e = lvl ? *(uint8_t**)(lvl + 0x38) : nullptr;
                     uint8_t* t = entity_by_id(id);
