@@ -302,12 +302,13 @@ Results (verified):
   - RVA 0x74C6CB in the timed entity-removal callback RVA 0x74C570, on a corpse that was already freed. The guard
     runs it only if the entity is still in g_server's table.
   After that both stayed alive ~95 s after the respawn.
-- **Open:** the respawned client can turn (right stick; screenshots `evidence/s6_respawn_input` a/b differ, first
-  person with AK and a pickup prompt) but not walk: forward 2.5 s left it at x 222.6, at both 1.2 m and 2.5 m from
-  the host (so not stuck in the corpse; verified 16:14–16:20). The first body walks fine in the same level. Guess:
-  a death/movement lock from the single-player death stays on the client. Checked and ruled out: the client's
-  `net_player` (new `@slotdump [slot]`, 0x70 bytes) keeps the dead body's id at +0x62 (0x167) while +0x64 gets the
-  new one (0x250F); setting +0x62 to the new id did not unlock movement (16:29).
+- The respawned client turns, fires (screenshot `evidence/s6_respawn_act/2`: muzzle flash, the host's Artyom and
+  the corpse's dropped shotgun in view) and picks up prompts. It seemed unable to walk; cause found (16:40–16:44):
+  `@goto` turned the body to face the host, so "forward" ran into the host or the corpse, and in l19 a wall/obstacle
+  stops walkers at x ≈ 223 (a 2.5 m spot at 222.6 was against it). `@goto` now keeps the target's facing and uses a
+  horizontal offset at the target's height; after it the first body walked away from the host (223.8 → 223.0, then
+  the obstacle). The respawn step-away is 1.2 m like the join one. Not a death lock. (Side note: the client's
+  `net_player` keeps the dead body's id at +0x62 while +0x64 gets the new one; `@slotdump [slot]` logs the slot.)
 - Crash diagnostics: a first-chance access-violation logger (`engine: AV rip … stack rvas: …`, first 6) is now always on.
 
 ### 5.3 Older notes (static, before the run)

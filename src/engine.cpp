@@ -481,8 +481,12 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     if (e && t) {
                         alignas(16) float m[16], tm[16];
                         memcpy(tm, t + 0xC0, sizeof(tm));
-                        for (int i = 0; i < 12; ++i) m[i] = (i % 4 == 3) ? 0 : ((i < 4 || i >= 8) ? -tm[i] : tm[i]);
-                        for (int i = 0; i < 3; ++i) m[12 + i] = tm[12 + i] + tm[8 + i] * dist;
+                        // same facing as the target: facing it made "forward" run into the host's body (16:40)
+                        for (int i = 0; i < 12; ++i) m[i] = (i % 4 == 3) ? 0 : tm[i];
+                        // horizontal forward only, same height as the target (the forward row can tilt)
+                        float fl = sqrtf(tm[8] * tm[8] + tm[10] * tm[10]);
+                        if (fl < 1e-3f) fl = 1;
+                        m[12] = tm[12] + tm[8] / fl * dist; m[13] = tm[13]; m[14] = tm[14] + tm[10] / fl * dist;
                         m[15] = 1;
                         using set_xform_t = void(__fastcall*)(void*, float*, int);
                         (*(set_xform_t**)e)[0x190 / 8](e, m, 0);
@@ -573,13 +577,14 @@ void engine_tick() {
     int slot = g_spawn_slot;
     if (slot >= 0 && GetTickCount64() >= g_spawn_at && g_spawn_slot.compare_exchange_strong(slot, -1))
         engine_exec("@spawn_player " + std::to_string(slot));
-    // Client: a respawned body appears on the host's spot; step away like the @join macro does for the first body,
-    // but further: at 1.2 m it landed in the corpse of the first body and could turn but not walk (verified 16:14).
+    // Client: a respawned body appears on the host's spot; step away like the @join macro does for the first body.
+    // shortcut: fixed 1.2 m in front of the host; level geometry can block it (in l19 a 2.5 m spot was inside an
+    // obstacle at x ~223 and the body could turn but not walk). Upgrade: pick a free spot (nav mesh / spawn points).
     static uint8_t* last_ctl = nullptr;
     uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA
     uint8_t* ctl = lvl ? *(uint8_t**)(lvl + 0x38) : nullptr;
     int local = *(int32_t*)((uint8_t*)GetModuleHandleA(nullptr) + 0xFD5028);  // net_core local slot index
-    if (ctl && last_ctl && ctl != last_ctl && local > 0) engine_exec("@goto s0 2.5");
+    if (ctl && last_ctl && ctl != last_ctl && local > 0) engine_exec("@goto s0 1.2");
     if (ctl) last_ctl = ctl;
     // Host: respawn a joiner whose body died (health float entity+0x308 <= 0), 5 s after death.
     // shortcut: fixed 5 s, respawns on the host's spot; upgrade with a respawn point / delay setting.

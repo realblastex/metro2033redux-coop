@@ -35,7 +35,7 @@ What does not work yet:
   within 15 s. An active monster moved on the host shows up on the client. Entities the host spawns (`@spawn`) exist on
   both sides with the same id.
 - The client's body has no knife (the torch is there) and no ammo items in its inventory.
-- A dead joiner gets a new body 5 s later; it can look around and is drawn on both sides, but it can't walk yet. Doors are not in the network list; door use between players is
+- A dead joiner gets a new body 5 s later, 1.2 m in front of the host (a wall there would block it). Doors are not in the network list; door use between players is
   untested. Damage, enemy AI and monster fights are untested (Hunter starts unarmed; in `l19_defence` no monster
   attacked within 2.5 min; a spawned monster stays asleep).
 - No AI or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only
