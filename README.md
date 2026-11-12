@@ -138,8 +138,8 @@ Useful engine console commands: `disconnect`, `server`, `map 2033\l01_hunter`, `
 ## Credits
 
 - [MinHook](https://github.com/TsudaKageyu/minhook) by Tsuda Kageyu (BSD-2-Clause), vendored copy from MetroDeveloper.
-- MetroDeveloper by its authors: its notes and its pre-Next-Gen `multiplayer_fix` pointed at the engine's leftover
-  multiplayer.
+- [MetroDeveloper](https://github.com/tsnest/MetroDeveloper) by its authors: its notes and its pre-Next-Gen
+  `multiplayer_fix` pointed at the engine's leftover multiplayer.
 
 ## License
 
