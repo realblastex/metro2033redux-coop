@@ -280,6 +280,33 @@ Results (verified):
   copying the host player's byte (16) into the clone with vtbl+0x2F8 changed nothing visible (reverted).
 - Unknown: sound, AI targeting the client. The client still logs `No ammo item` (7 times before the guard), so its ammo count is probably not real.
 
+### 5.6 Death and respawn (session 6, 15:24–16:08)
+
+- A killed client stays dead: death camera on the floor, no HUD, no reload, no menu; the process keeps running
+  (verified 15:25, `evidence/s6_death`). The host keeps the corpse (h<0).
+- Engine slot reset RVA 0x6B8E30 (`net_player*`; +0x64 = 0xFFFF, bumps +0x69 on a server) makes the **client reload
+  the level**: it logs `change_map_cl 2033\l19_defence`, `disconnect 1`, `server 1`, `map …` (verified 15:31). That
+  is probably the engine's MP respawn / level-change path for clients. Problems found on the way (each verified):
+  `server 1` = net start with the address "1" (resolves to nowhere); `map` clears the MP flag so ENet stops and the
+  host drops the client after 10 s; a load logs `mapstate_loaded_and_waiting` twice (after the map, and after
+  `load save bin`), finishing after the first crashed. With all three worked around the reload got the host's qsave,
+  then crashed in the engine heap free (RVA 0x658D70) called from a script/animation loader (RVA 0x4A5850 →
+  vector grow RVA 0x159CE0) freeing a stale buffer. The workarounds were removed again.
+- Working respawn (verified 15:57 and 16:07): spawn a new body onto the still-linked slot (`@respawn [slot]` =
+  `@spawn_player <slot> force`; `link_actor` re-links it and the client gets `[net] pid==1, eid==<new>`). The
+  host does it by itself 5 s after a joiner's body health drops to ≤ 0 (engine_tick, `slot 1 body … is dead,
+  respawning`). The client then steps 1.2 m in front of the host when its controlled body changes.
+  Two client crashes on the way, both guarded:
+  - RVA 0x2AEBF7 in the weapon ammo count RVA 0x2AEAF0: ammo item lookup (inventory vtbl+0xD0) returns null for a
+    cloned body. SEH guard returns -1.
+  - RVA 0x74C6CB in the timed entity-removal callback RVA 0x74C570, on a corpse that was already freed. The guard
+    runs it only if the entity is still in g_server's table.
+  After that both stayed alive ~95 s after the respawn.
+- **Open:** the respawned client does not move with its pad (forward 2 s at 16:07:46 did nothing). Guess: the
+  single-player death state (input lock / death camera) stays active on the client. The corpse disappears on the
+  client but stays on the host.
+- Crash diagnostics: a first-chance access-violation logger (`engine: AV rip … stack rvas: …`, first 6) is now always on.
+
 ### 5.3 Older notes (static, before the run)
 
 In MP levels the player bodies already exist in the level, one per slot, linked with `instead_of`. Respawn

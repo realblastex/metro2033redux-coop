@@ -33,6 +33,9 @@ static void engine_watch_net_time();
 void engine_watch_write(uintptr_t addr);
 static void pad_command(const std::string& args);
 static void aim_command(unsigned id, unsigned ms);
+static LONG CALLBACK av_veh(EXCEPTION_POINTERS* e);
+static std::atomic<int> g_spawn_slot{-1};      // pending body spawn (engine_tick runs it at g_spawn_at)
+static std::atomic<uint64_t> g_spawn_at{0};
 // Engine MP flag (RVA 0xFBDF2A). net start (RVA 0x6B7EA0): with an address arg it sets the flag and connects as a
 // client; without one it becomes the network server only if this flag is already 1, else a local-only game.
 // So hosting = "@mp 1" then "server" (no arg).
@@ -57,7 +60,7 @@ static str_shared_t g_str_shared = nullptr;
 static void** g_strc = nullptr;
 using level_signal_t = void(__fastcall*)(void*, void**, void*, uint32_t);
 static level_signal_t g_level_signal = nullptr;
-using net_start_t = void(__fastcall*)(void*, const char*);
+using net_start_t = uint64_t(__fastcall*)(void*, const char*);
 static net_start_t g_net_start = nullptr;  // RVA 0x6B7EA0 (this, address or nullptr)
 // link_actor(net_player*, u16 entity id) (RVA 0x6B89F0): set_actor_id (RVA 0x4C330: +0x64 = id, drops +0x58 handle)
 // and slot state |= 0x50000. The server's player spawner (RVA 0x6F6210) calls it after spawning a player entity,
@@ -386,7 +389,7 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     snprintf(buf, sizeof(buf), "engine: spawn_player slot %d from %p '%s' (server %p, players %d, ok %d)",
                              slot, player, entity_name(player), server, g_players ? g_players->size : -1, ok);
                     LOG_INFO(buf);
-                    if (is_player && g_players && slot < g_players->size &&
+                    if (is_player && c.find(" force") == std::string::npos && g_players && slot < g_players->size &&
                         *(uint16_t*)((uint8_t*)g_players->array + slot * 0x70 + 0x64) != 0xFFFF) {
                         LOG_INFO("engine: spawn_player skipped, slot already has an actor");
                     } else if (ok && player && server && g_players && (!is_player || slot < g_players->size)) {
@@ -439,6 +442,15 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         ++shown;
                     }
                     LOG_INFO("engine: dump done, " + std::to_string(n) + " entities, " + std::to_string(shown) + " shown");
+                    continue;
+                }
+                if (c.rfind("@respawn", 0) == 0) {
+                    // "@respawn [slot]" (host): spawn a new body onto the still-linked slot (link_actor in the spawn
+                    // event re-links it). Not the engine's slot reset (RVA 0x6B8E30): that makes the client reload
+                    // the level (change_map_cl) and the reload crashed in a heap free (FINDINGS 5.6).
+                    int slot = 1;
+                    sscanf_s(c.c_str() + 8, "%d", &slot);
+                    engine_exec("@spawn_player " + std::to_string(slot) + " force");
                     continue;
                 }
                 if (c.rfind("@goto ", 0) == 0) {
@@ -543,14 +555,35 @@ using spp_t = uint64_t(__fastcall*)(uint32_t, void*);
 static spp_t g_spp_orig = nullptr;
 
 static std::atomic<uint32_t> g_auto_spawn_s{0};
-static std::atomic<int> g_spawn_slot{-1};
-static std::atomic<uint64_t> g_spawn_at{0};
 void engine_set_auto_spawn(uint32_t delay_s) { g_auto_spawn_s = delay_s; }
 void engine_tick() {
     // shortcut: one pending spawn at a time; a second peer joining within the delay replaces the first one's
     int slot = g_spawn_slot;
     if (slot >= 0 && GetTickCount64() >= g_spawn_at && g_spawn_slot.compare_exchange_strong(slot, -1))
         engine_exec("@spawn_player " + std::to_string(slot));
+    // Client: a respawned body appears on the host's spot; step away like the @join macro does for the first body.
+    static uint8_t* last_ctl = nullptr;
+    uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA
+    uint8_t* ctl = lvl ? *(uint8_t**)(lvl + 0x38) : nullptr;
+    if (ctl && last_ctl && ctl != last_ctl && *(int32_t*)((uint8_t*)GetModuleHandleA(nullptr) + 0xFD5028) > 0)
+        engine_exec("@goto s0 1.2");
+    if (ctl) last_ctl = ctl;
+    // Host: respawn a joiner whose body died (health float entity+0x308 <= 0), 5 s after death.
+    // shortcut: fixed 5 s, respawns on the host's spot; upgrade with a respawn point / delay setting.
+    static uint64_t dead_since[8] = {};
+    uint8_t* exe = (uint8_t*)GetModuleHandleA(nullptr);
+    bool server = g_players && g_mp_flag && *g_mp_flag && *(int32_t*)(exe + 0xFD5028) == 0;  // net_core local idx 0
+    for (int s = 1; server && s < g_players->size && s < 8; ++s) {
+        uint16_t id = *(uint16_t*)((uint8_t*)g_players->array + s * 0x70 + 0x64);
+        uint8_t* e = id != 0xFFFF ? entity_by_id(id) : nullptr;
+        if (!e || *(float*)(e + 0x308) > 0) { dead_since[s] = 0; continue; }
+        if (!dead_since[s]) dead_since[s] = GetTickCount64();
+        else if (GetTickCount64() - dead_since[s] > 5000) {
+            dead_since[s] = 0;
+            LOG_INFO("engine: slot " + std::to_string(s) + " body " + std::to_string(id) + " is dead, respawning");
+            engine_exec("@respawn " + std::to_string(s));
+        }
+    }
 }
 
 static uint64_t __fastcall spp_hook(uint32_t pid, void* props) {
@@ -599,6 +632,29 @@ static void __fastcall ammo_bind_hook(uint8_t* hud, void* a2, void* a3) {
     for (unsigned i = 0; i < *(uint16_t*)(hud + 0x112); ++i)
         *(int32_t*)(*(uint8_t**)(hud + 0x108) + i * 0xB8 + 0xA8) = 0;
     g_ammo_bind_orig(hud, a2, a3);
+}
+
+// RVA 0x2AEAF0 (weapon ammo count, -1 = no weapon) looks the ammo item up with inventory vtbl+0xD0 and dereferences
+// it without a check. A cloned body has no ammo items (same root cause as the HUD guard above), and the client crashed
+// there at RVA 0x2AEBF7 right after a respawned body arrived (verified 15:53).
+// shortcut: SEH around the whole call returns -1 on any fault inside; upgrade by giving cloned bodies ammo items.
+using ammo_count_t = int(__fastcall*)(void*);
+static ammo_count_t g_ammo_count_orig = nullptr;
+static int __fastcall ammo_count_hook(void* w) {
+    __try { return g_ammo_count_orig(w); } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+
+// RVA 0x74C570: timed "remove this entity" callback (runs again later while game time < entity+0x204, then destroys
+// it with RVA 0x6A9030 or the net destroy RVA 0x6BA440). After a respawn the client crashed in it at RVA 0x74C6CB on a
+// freed corpse (verified 16:03): the corpse was already gone while its timer was still queued. Run it only for
+// entities still in g_server's table (pointer compare only, so a freed one is never read).
+using remove_cb_t = void(__fastcall*)(uint8_t*);
+static remove_cb_t g_remove_cb_orig = nullptr;
+static void __fastcall remove_cb_hook(uint8_t* e) {
+    uint8_t* server = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD850);  // shortcut: fixed RVA
+    for (int i = 0; server && i < *(uint16_t*)(server + 0x1A); ++i)
+        if (*(uint8_t**)(*(uint8_t**)(server + 0x10) + i * 16 + 8) == e) { g_remove_cb_orig(e); return; }
+    LOG_INFO("engine: skipped removal timer of a freed entity");
 }
 
 using lookup_t = void*(__fastcall*)(void*, void***);
@@ -692,6 +748,17 @@ static bool install_player_slot_fix() {
         MH_EnableHook((LPVOID)*np) == MH_OK)
         LOG_INFO("engine: no-player guard installed");
     else LOG_ERROR("engine: no-player guard pattern not found");
+    AddVectoredExceptionHandler(0, av_veh);  // diagnostics only, see av_veh
+    auto ac = find("40 53 56 57 48 83 EC 20 48 8B B9 88 00 00 00 48 8B F1 48 85 FF 0F 84 ? ? ? ? 48 81 C1 80 01");
+    if (ac && MH_CreateHook((LPVOID)*ac, (LPVOID)&ammo_count_hook, (LPVOID*)&g_ammo_count_orig) == MH_OK &&
+        MH_EnableHook((LPVOID)*ac) == MH_OK)
+        LOG_INFO("engine: ammo count guard installed");
+    else LOG_ERROR("engine: ammo count guard pattern not found");
+    auto rc = find("40 53 48 83 EC 30 8B 05 ? ? ? ? 48 8B D9 39 81 04 02 00 00 76 48 E8");
+    if (rc && MH_CreateHook((LPVOID)*rc, (LPVOID)&remove_cb_hook, (LPVOID*)&g_remove_cb_orig) == MH_OK &&
+        MH_EnableHook((LPVOID)*rc) == MH_OK)
+        LOG_INFO("engine: removal timer guard installed");
+    else LOG_ERROR("engine: removal timer guard pattern not found");
     auto tr = find("40 57 48 81 EC A0 00 00 00 83 B9 44 08 00 00 00 48 8B F9 0F 84 ? ? ? ? 48 8B 81 D0 04 00 00");
     if (tr && MH_CreateHook((LPVOID)*tr, (LPVOID)&track_hook, (LPVOID*)&g_track_orig) == MH_OK &&
         MH_EnableHook((LPVOID)*tr) == MH_OK)
@@ -871,6 +938,26 @@ static LONG CALLBACK watch_veh(EXCEPTION_POINTERS* e) {
     e->ContextRecord->Dr6 = 0;
     return EXCEPTION_CONTINUE_EXECUTION;
 }
+// Crash diagnostics: log the first access violations (first chance, so handled ones show up too) with RIP and the
+// stack values that point into metro.exe, as RVAs. Added for the client crash in a garbage address during a
+// change_map_cl reload (no module at the fault address).
+static LONG CALLBACK av_veh(EXCEPTION_POINTERS* e) {
+    static std::atomic<int> n{0};
+    if (e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || n++ >= 6) return EXCEPTION_CONTINUE_SEARCH;
+    uintptr_t base = (uintptr_t)GetModuleHandleA(nullptr), size = 0x1100000;  // shortcut: exe image size ~17 MB
+    uintptr_t* sp = (uintptr_t*)e->ContextRecord->Rsp;
+    char b[400];
+    int len = snprintf(b, sizeof(b), "engine: AV rip %llX (rva %llX) addr %llX stack rvas:",
+                       (unsigned long long)e->ContextRecord->Rip, (unsigned long long)(e->ContextRecord->Rip - base),
+                       (unsigned long long)e->ExceptionRecord->ExceptionInformation[1]);
+    for (int i = 0, found = 0; i < 256 && found < 6 && len < 380; ++i) {
+        uintptr_t v = sp[i];
+        if (v > base && v < base + size) { len += snprintf(b + len, sizeof(b) - len, " %llX", (unsigned long long)(v - base)); ++found; }
+    }
+    LOG_INFO(b);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 void engine_watch_write(uintptr_t addr) {
     g_watch_addr = addr;
     AddVectoredExceptionHandler(1, watch_veh);
