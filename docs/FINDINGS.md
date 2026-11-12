@@ -25,6 +25,9 @@ yet exercised, **unknown** = not found yet.
   entity+0xC0 (translation at +0xF0); set_transform = entity vtbl+0x190(&m, 0).
 - Soak run (verified 10:16–10:21): ~4 min of co-op, host 12 and client 12 forward/back moves. Both stayed alive (no
   event-1000 crash). At the end both sides show the same positions: s0 (-4.8,-2.6,-16.0), s1 (-5.6,-2.6,-16.1).
+- NPCs (verified 10:33, `@dump npc` on both sides ~60 s after the join): same 3477 entities with the same ids; 14
+  `npc*` entities, positions equal within 0.06 m (e.g. `npc_scene_0001` -157.39 vs -157.45). Unknown: whether the
+  host replicates NPCs or both sides simulate the same scripted scene. Most of these NPCs are far from the start room.
 - **Next problems:** combat (damage between players, NPCs targeting the client), AI, doors and story events are not
   checked. Level transitions, save/load and LAN are not tested.
 

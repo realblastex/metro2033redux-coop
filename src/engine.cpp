@@ -366,6 +366,25 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     }
                     continue;
                 }
+                if (c.rfind("@dump", 0) == 0) {
+                    // "@dump [name filter]": log id, name, position of g_server's entities (table *(g_server+0x10),
+                    // 16-byte entries with the entity at +8, count u16 at +0x1A; walked like the save job RVA 0x3CD210)
+                    std::string filter = c.size() > 6 ? c.substr(6) : "";
+                    uint8_t* server = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD850);  // shortcut: fixed RVA
+                    int n = server ? *(uint16_t*)(server + 0x1A) : 0, shown = 0;
+                    for (int i = 0; i < n && shown < 64; ++i) {
+                        uint8_t* e = *(uint8_t**)(*(uint8_t**)(server + 0x10) + i * 16 + 8);
+                        const char* name = e ? entity_name(e + 0xA0) : "?";
+                        if (!e || (!filter.empty() && !strstr(name, filter.c_str()))) continue;
+                        char buf[160];
+                        snprintf(buf, sizeof(buf), "engine: dump %X '%s' (%.2f,%.2f,%.2f)", *(uint16_t*)(e + 0x108), name,
+                                 *(float*)(e + 0xF0), *(float*)(e + 0xF4), *(float*)(e + 0xF8));
+                        LOG_INFO(buf);
+                        ++shown;
+                    }
+                    LOG_INFO("engine: dump done, " + std::to_string(n) + " entities, " + std::to_string(shown) + " shown");
+                    continue;
+                }
                 if (c.rfind("@teleport", 0) == 0) {
                     // "@teleport <dx> <dy> <dz>": move the controlled entity (*(g_level+0x38)) by an offset. Its 4x4
                     // transform is at entity+0xC0 (translation row at +0xF0); set_transform = entity vtbl+0x190(&m, 0),

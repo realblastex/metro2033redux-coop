@@ -142,6 +142,7 @@ client.
 | `@link_actor [slot] [id hex]` | link a net player slot to an actor (default: slot 0 + the local player) |
 | `@spawn_player [slot]` | host only: spawn a copy of the local player as the body of net slot `slot` (default 1) |
 | `@teleport <dx> <dy> <dz>` | move the entity this instance controls by an offset (metres) |
+| `@dump [filter]` | log id, name and position of entities whose name contains `filter` (diagnostics) |
 | `@signal <name>` | raise a level signal |
 | `@watch <rva hex>` / `@watch_slot <n>` / `@watch_net_time` | hardware write-watchpoints (diagnostics) |
 
