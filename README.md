@@ -24,8 +24,8 @@ What does not work yet:
 
 - Both bodies spawn on the same spot; the client moves itself away with `@teleport`. See
   [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
-- NPCs are not replicated (at least not far from the players): both sides run the same scripts, so they stay in
-  step until something differs. Combat, doors and story events are not checked between players.
+- NPCs near the players replicate from the host (distance priority, ~128 bytes per packet); far NPCs did not update
+  within 15 s. Combat, doors and story events are not checked between players.
 - No AI, door or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only
   over loopback.
 

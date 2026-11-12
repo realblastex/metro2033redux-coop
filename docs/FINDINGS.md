@@ -30,9 +30,16 @@ yet exercised, **unknown** = not found yet.
   host replicates NPCs or both sides simulate the same scripted scene. Most of these NPCs are far from the start room.
 - NPC replication test (verified 10:36): the host teleported `npc_friend_fx_0004` (id 0x3BE) by +100 m
   (`@teleport 100 0 0 3BE`). The host's copy moved to x=-49.93; the client's copy stayed at -149.93 for 15 s. So that
-  NPC is not replicated; the matching positions came from both sides running the same scripts. Unknown: whether NPCs
-  near a player are replicated. The host's per-player send list is built by `FUN_140747630(net_core, &list, slot)`
-  (in the send job RVA 0x6B4D00), and each entity is written with entity vtbl+0x180. Next: log that list's ids.
+  far NPC's move did not reach the client.
+- Nearby NPCs replicate (verified 10:42): the host moved `man_place_0003` (0x16D, ~12 m from the players) by +2 m;
+  the client's copy showed the new position (1.21,-4.67,-4.22) within 6 s.
+- How (derived from RVA 0x747630, list verified with `@dump net`): the host keeps a list of networked entities at
+  net_core+0x168 (16-byte entries `{u16 id, …, handle at +8}`, count u16 at +0x172). In Hunter it holds 39
+  entities: both players and all human NPCs (`man_place_*`, `sanitarka`, `npc_friend_fx_*`, guards, …). Per client
+  slot, every entity gets a priority from entity vtbl+0x170 × distance × view-direction factors, accumulated until
+  sent. The send job writes the top ones with entity vtbl+0x180 into a ~128-byte budget per packet. A far NPC
+  (~140 m) never won a slot within 15 s.
+- The client registers 51 networked entities, the host 39 (the client list was not dumped yet).
 - **Next problems:** combat (damage between players, NPCs targeting the client), AI, doors and story events are not
   checked. Level transitions, save/load and LAN are not tested.
 

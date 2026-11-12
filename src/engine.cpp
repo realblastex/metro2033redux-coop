@@ -375,7 +375,14 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     for (int i = 0; i < n && shown < 64; ++i) {
                         uint8_t* e = *(uint8_t**)(*(uint8_t**)(server + 0x10) + i * 16 + 8);
                         const char* name = e ? entity_name(e + 0xA0) : "?";
-                        if (!e || (!filter.empty() && !strstr(name, filter.c_str()))) continue;
+                        if (!e) continue;
+                        if (filter == "net") {  // only the networked entities (net_core+0x168, see ctl_str)
+                            uint8_t* nc = g_players ? (uint8_t*)g_players - 0x18 : nullptr;
+                            bool in = false;
+                            for (int k = 0; nc && k < *(uint16_t*)(nc + 0x172) && !in; ++k)
+                                in = *(uint16_t*)(*(uint8_t**)(nc + 0x168) + k * 16) == *(uint16_t*)(e + 0x108);
+                            if (!in) continue;
+                        } else if (!filter.empty() && !strstr(name, filter.c_str())) continue;
                         char buf[160];
                         snprintf(buf, sizeof(buf), "engine: dump %X '%s' (%.2f,%.2f,%.2f)", *(uint16_t*)(e + 0x108), name,
                                  *(float*)(e + 0xF0), *(float*)(e + 0xF4), *(float*)(e + 0xF8));
@@ -762,6 +769,15 @@ static void ctl_str(char* b, size_t n) {
         if (e) snprintf(b, n, " ctl=%X@(%.1f,%.1f,%.1f)", *(uint16_t*)(e + 0x108), *(float*)(e + 0xF0),
                         *(float*)(e + 0xF4), *(float*)(e + 0xF8));
         else snprintf(b, n, " ctl=none");
+        // host's networked entities (send candidates, FUN_140747630): net_core+0x168 {u16 id; pad; handle} x count(+0x172)
+        if (g_players) {
+            uint8_t* nc = (uint8_t*)g_players - 0x18;
+            int cnt = *(uint16_t*)(nc + 0x172);
+            size_t used = strlen(b);
+            used += snprintf(b + used, n - used, " net=%d", cnt);
+            for (int i = 0; i < cnt && i < 6 && used < n; ++i)
+                used += snprintf(b + used, n - used, "%c%X", i ? ',' : ':', *(uint16_t*)(*(uint8_t**)(nc + 0x168) + i * 16));
+        }
         for (uint8_t* a : g_seen_actors) {  // actors the aim hook saw, same layout
             size_t used = strlen(b);
             if (a && used < n) snprintf(b + used, n - used, " a%X@(%.1f,%.1f)", *(uint16_t*)(a + 0x108),
