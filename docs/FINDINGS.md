@@ -44,6 +44,13 @@ yet exercised, **unknown** = not found yet.
   `hunter_old_0001`, `man_place_0017`. The host never sends entities it doesn't list, so the client runs those on its
   own. Likely desync source once monsters fight. Unknown why the lists differ (the host loaded an SP save, the
   client the host's quick save).
+- Registration (verified writer, derived conditions): a hardware watch on the count (global RVA 0xFD5192) during
+  `@host` caught only the insert RVA 0x831C0, called from `FUN_140747F60(net_core, &handle)` ("make relevant", logs
+  `* relevant: <name>` to engine.log). Nothing registers during a plain SP load (list empty until `@host`).
+  Conditions: MP flag set; entity vtbl+0xB80 == 0 (not destroyed); vtbl+0xB88 != 0 (active); flags `+0x10C & 0x204
+  == 4`; priority vtbl+0x170 ≥ 0. Low-priority entities also need `*(g_level+0x220) ≥ 5`. Max 256 entities
+  (`!too many network synch entities`). Guess: the host's `nosalis` were inactive at `@host` time and register when
+  they wake. Check with the `* relevant:` lines during the intro attack.
 - **Next problems:** combat (damage between players, NPCs targeting the client), AI, doors and story events are not
   checked. Level transitions, save/load and LAN are not tested.
 
