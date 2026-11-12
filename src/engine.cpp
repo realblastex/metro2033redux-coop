@@ -36,6 +36,7 @@ static void aim_command(unsigned id, unsigned ms);
 static LONG CALLBACK av_veh(EXCEPTION_POINTERS* e);
 static std::atomic<int> g_spawn_slot{-1};      // pending body spawn (engine_tick runs it at g_spawn_at)
 static std::atomic<uint64_t> g_spawn_at{0};
+static std::atomic<bool> g_spawn_force{false};  // respawn: spawn even though the slot still has a (dead) actor
 // Engine MP flag (RVA 0xFBDF2A). net start (RVA 0x6B7EA0): with an address arg it sets the flag and connects as a
 // client; without one it becomes the network server only if this flag is already 1, else a local-only game.
 // So hosting = "@mp 1" then "server" (no arg).
@@ -439,14 +440,50 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         // h = health float at +0x308 (loader RVA 0x21C130 reads "health" there; meaningful for
                         // entities of that class only)
                         // fwd = x/z of the matrix forward row (+0xE0), shows a door's rotation
-                        snprintf(buf, sizeof(buf), "engine: dump %X '%s' (%.2f,%.2f,%.2f) fwd=(%.2f,%.2f) f=%X b6=%u b7=%u h=%.3f",
+                        // p = parent id: handle at +0x118 (attach/detach RVA 0x6DD360), id u16 at handle target +0x68
+                        void** ph = *(void***)(e + 0x118);
+                        unsigned pid = ph && *ph ? *(uint16_t*)((uint8_t*)*ph + 0x68) : 0xFFFF;
+                        snprintf(buf, sizeof(buf), "engine: dump %X '%s' (%.2f,%.2f,%.2f) fwd=(%.2f,%.2f) f=%X b6=%u b7=%u h=%.3f p=%X",
                                  *(uint16_t*)(e + 0x108), name, *(float*)(e + 0xF0), *(float*)(e + 0xF4),
                                  *(float*)(e + 0xF8), *(float*)(e + 0xE0), *(float*)(e + 0xE8), *(uint32_t*)(e + 0x10C),
-                                 e[0xB6], e[0xB7], *(float*)(e + 0x308));
+                                 e[0xB6], e[0xB7], *(float*)(e + 0x308), pid);
                         LOG_INFO(buf);
                         ++shown;
                     }
                     LOG_INFO("engine: dump done, " + std::to_string(n) + " entities, " + std::to_string(shown) + " shown");
+                    continue;
+                }
+                if (c.rfind("@fix_ammo", 0) == 0) {
+                    // "@fix_ammo <id hex|s<slot>>": the player clone copies the ammo items, but leaves them detached
+                    // (parent FFFF, flag 0x2000) while the weapons get the new body as parent (dump 16:55), so its
+                    // inventory finds no ammo ("No ammo item"). Attach detached cloned ammo_* items within 3 m to the
+                    // body with the engine's attach (RVA 0x6DD360: entity, &out handle, &parent handle, &flags).
+                    unsigned id = 0xFFFF;
+                    if (c.size() > 10 && c[10] == 's') {
+                        int slot = atoi(c.c_str() + 11);
+                        if (g_players && slot >= 0 && slot < g_players->size)
+                            id = *(uint16_t*)((uint8_t*)g_players->array + slot * 0x70 + 0x64);
+                    } else sscanf_s(c.c_str() + 9, "%x", &id);
+                    uint8_t* body = entity_by_id(id);
+                    uint8_t* exe = (uint8_t*)GetModuleHandleA(nullptr);
+                    uint8_t* server = *(uint8_t**)(exe + 0xFBD850);  // shortcut: fixed RVAs
+                    int n = 0;
+                    if (body && server && exe[0x6DD360] == 0x40 && exe[0x6DD363] == 0x56) {
+                        using attach_t = void*(__fastcall*)(void*, void**, void**, uint8_t*);
+                        void* parent = *(void**)(body + 0xA0);
+                        for (int i = 0; i < *(uint16_t*)(server + 0x1A); ++i) {
+                            uint8_t* e = *(uint8_t**)(*(uint8_t**)(server + 0x10) + i * 16 + 8);
+                            if (!e || !(*(uint32_t*)(e + 0x10C) & 0x10000) || strncmp(entity_name(e + 0xA0), "ammo_", 5)) continue;
+                            void** ph = *(void***)(e + 0x118);
+                            if (ph && *ph) continue;  // already attached
+                            float dx = *(float*)(e + 0xF0) - *(float*)(body + 0xF0), dz = *(float*)(e + 0xF8) - *(float*)(body + 0xF8);
+                            if (dx * dx + dz * dz > 9) continue;
+                            void* out = nullptr; uint8_t flags = 0;
+                            ((attach_t)(exe + 0x6DD360))(e, &out, &parent, &flags);
+                            ++n;
+                        }
+                    }
+                    LOG_INFO("engine: fix_ammo body " + std::to_string(id) + ": attached " + std::to_string(n));
                     continue;
                 }
                 if (c.rfind("@slotdump", 0) == 0) {  // "@slotdump [slot]": hex of the 0x70-byte net_player
@@ -467,7 +504,9 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     // the level (change_map_cl) and the reload crashed in a heap free (FINDINGS 5.6).
                     int slot = 1;
                     sscanf_s(c.c_str() + 8, "%d", &slot);
-                    engine_exec("@spawn_player " + std::to_string(slot) + " force");
+                    g_spawn_force = true;  // engine_tick spawns (skipping the "slot has an actor" check) and fixes its ammo
+                    g_spawn_at = GetTickCount64();
+                    g_spawn_slot = slot;
                     continue;
                 }
                 if (c.rfind("@goto ", 0) == 0) {
@@ -580,8 +619,13 @@ void engine_set_auto_spawn(uint32_t delay_s) { g_auto_spawn_s = delay_s; }
 void engine_tick() {
     // shortcut: one pending spawn at a time; a second peer joining within the delay replaces the first one's
     int slot = g_spawn_slot;
-    if (slot >= 0 && GetTickCount64() >= g_spawn_at && g_spawn_slot.compare_exchange_strong(slot, -1))
-        engine_exec("@spawn_player " + std::to_string(slot));
+    static int fix_slot = -1;
+    static uint64_t fix_at = 0;
+    if (slot >= 0 && GetTickCount64() >= g_spawn_at && g_spawn_slot.compare_exchange_strong(slot, -1)) {
+        engine_exec("@spawn_player " + std::to_string(slot) + (g_spawn_force.exchange(false) ? " force" : ""));
+        fix_slot = slot; fix_at = GetTickCount64() + 3000;  // the body exists once the host ran its own spawn event
+    }
+    if (fix_slot >= 0 && GetTickCount64() >= fix_at) { engine_exec("@fix_ammo s" + std::to_string(fix_slot)); fix_slot = -1; }
     // Client: a respawned body appears on the host's spot; step away like the @join macro does for the first body.
     // shortcut: fixed 1.2 m in front of the host; level geometry can block it (in l19 a 2.5 m spot was inside an
     // obstacle at x ~223 and the body could turn but not walk). Upgrade: pick a free spot (nav mesh / spawn points).
@@ -589,7 +633,10 @@ void engine_tick() {
     uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA
     uint8_t* ctl = lvl ? *(uint8_t**)(lvl + 0x38) : nullptr;
     int local = *(int32_t*)((uint8_t*)GetModuleHandleA(nullptr) + 0xFD5028);  // net_core local slot index
-    if (ctl && last_ctl && ctl != last_ctl && local > 0) engine_exec("@goto s0 1.2");
+    if (ctl && last_ctl && ctl != last_ctl && local > 0) {
+        engine_exec("@goto s0 1.2");
+        engine_exec("@fix_ammo s" + std::to_string(local));
+    }
     if (ctl) last_ctl = ctl;
     // Host: respawn a joiner whose body died (health float entity+0x308 <= 0), 5 s after death.
     // shortcut: fixed 5 s, respawns on the host's spot; upgrade with a respawn point / delay setting.

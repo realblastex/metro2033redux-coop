@@ -309,6 +309,15 @@ Results (verified):
   horizontal offset at the target's height; after it the first body walked away from the host (223.8 → 223.0, then
   the obstacle). The respawn step-away is 1.2 m like the join one. Not a death lock. (Side note: the client's
   `net_player` keeps the dead body's id at +0x62 while +0x64 gets the new one; `@slotdump [slot]` logs the slot.)
+- Cloned body ammo (verified 16:55–17:07): `@dump` now prints `p=` (parent id; handle at entity+0x118, id at the
+  handle target +0x68). The host's ammo items (`ammo_545x39_fmj_0453` 0x390C, `ammo_044_*`) have parent F107 (the
+  host player); their clones (0x1119, 0xE04, f=0x12103) have **no parent**, while the cloned weapons have the new
+  body as parent. That is why the clone's inventory finds no ammo (`!No ammo item. Save level, bleat !!!`, the HUD
+  and ammo-count crashes). `@fix_ammo <id|s<slot>>` attaches detached cloned `ammo_*` items within 3 m to the body
+  with the engine's attach RVA 0x6DD360 `(entity, &out, &parent handle, &flags=0)`; it now runs on the host 3 s
+  after each spawn and on the client when its body changes. Result: host 3 items attached, 0 `No ammo item` lines;
+  client 11 attached, 0 lines until it dies (afterwards a periodic one every 7–11 s, as before). Respawn smoke
+  `RESULT: PASS (10 checks)`.
 - Crash diagnostics: a first-chance access-violation logger (`engine: AV rip … stack rvas: …`, first 6) is now always on.
 
 ### 5.3 Older notes (static, before the run)

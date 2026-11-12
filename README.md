@@ -34,7 +34,8 @@ What does not work yet:
 - NPCs near the players replicate from the host (distance priority, ~128 bytes per packet); far NPCs did not update
   within 15 s. An active monster moved on the host shows up on the client. Entities the host spawns (`@spawn`) exist on
   both sides with the same id.
-- The client's body has no knife (the torch is there) and no ammo items in its inventory.
+- The client's body has no knife (the torch is there). Its ammo items are cloned detached; the mod re-attaches them
+  (`@fix_ammo`, automatic).
 - A dead joiner gets a new body 5 s later, 1.2 m in front of the host (a wall there would block it). Doors are not in the network list; door use between players is
   untested. Damage, enemy AI and monster fights are untested (Hunter starts unarmed; in `l19_defence` no monster
   attacked within 2.5 min; a spawned monster stays asleep).
@@ -159,6 +160,7 @@ client.
 | `@link_actor [slot] [id hex]` | link a net player slot to an actor (default: slot 0 + the local player) |
 | `@spawn_player [slot]` | host only: spawn a copy of the local player as the body of net slot `slot` (default 1) |
 | `@teleport <dx> <dy> <dz> [id hex]` | move the entity this instance controls (or entity `id`) by an offset (metres) |
+| `@fix_ammo <id hex\|s<slot>>` | attach the detached cloned ammo items near a body to it (runs by itself after spawns) |
 | `@slotdump [slot]` | log the raw 0x70-byte `net_player` of `slot` (diagnostics) |
 | `@respawn [slot]` | host: give net slot `slot` (default 1) a new body; runs by itself 5 s after that body dies |
 | `@aim <id hex> [ms]` | turn this instance's view toward entity `id` with the fake right stick (yaw only) |
