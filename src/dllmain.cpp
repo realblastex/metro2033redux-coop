@@ -23,6 +23,7 @@ struct Config {
     uint32_t exec_delay_s = 5;      // delay after injection before exec_on_start starts
     bool keep_active = true;        // keep running while the window is unfocused (network play needs this)
     uint16_t engine_bind_port = 0;  // 0 = engine default 1000; e.g. 1001 for a second instance on the same PC
+    uint32_t auto_spawn_s = 15;     // host: spawn a body for a joining player this many seconds after it connects (0 = off)
 };
 
 static std::string trim(const std::string& s) {
@@ -37,7 +38,7 @@ static Config load_config(const std::string& path) {
     if (!in) {
         std::ofstream out(path);
         out << "; Metro 2033 Redux co-op - see README for exec_on_start commands\n"
-               "exec_on_start = \nexec_delay_s = 5\nkeep_active = true\nengine_bind_port = 0\n";
+               "exec_on_start = \nexec_delay_s = 5\nkeep_active = true\nengine_bind_port = 0\nauto_spawn_s = 15\n";
         return c;
     }
     for (std::string line; std::getline(in, line);) {
@@ -49,6 +50,7 @@ static Config load_config(const std::string& path) {
         else if (k == "exec_delay_s") c.exec_delay_s = (uint32_t)strtoul(v.c_str(), nullptr, 0);
         else if (k == "keep_active") c.keep_active = v == "true" || v == "1";
         else if (k == "engine_bind_port") c.engine_bind_port = (uint16_t)strtoul(v.c_str(), nullptr, 0);
+        else if (k == "auto_spawn_s") c.auto_spawn_s = (uint32_t)strtoul(v.c_str(), nullptr, 0);
     }
     return c;
 }
@@ -142,11 +144,13 @@ static DWORD WINAPI main_thread(LPVOID) {
     }
     if (cfg.engine_bind_port) engine_set_bind_port(cfg.engine_bind_port);
     if (cfg.keep_active) engine_keep_active();
+    engine_set_auto_spawn(cfg.auto_spawn_s);
 
     ExecRunner exec(cfg);
     g_running = true;
     for (uint64_t tick = 1; g_running; ++tick) {
         exec.tick();
+        engine_tick();
         if (tick % 625 == 0) LOG_INFO("heartbeat: " + engine_stats());  // ~10 s; tests read state from here
         Sleep(16);
     }

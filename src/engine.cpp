@@ -93,6 +93,14 @@ static void __fastcall slog_hook(const char* s) {
     }
     if (g_engine_log && s) {
         std::lock_guard<std::mutex> lock(g_engine_log_mutex);
+        // Collapse repeats: after @link_actor the weapon UI update (RVA 0x526AA0) logs "!No ammo item..." every frame
+        // (~4000 lines/s), which made engine.log huge and slow.
+        static std::string last;
+        static unsigned repeats = 0;
+        if (last == s) { ++repeats; g_slog_orig(s); return; }
+        if (repeats) fprintf(g_engine_log, "    (previous line repeated %u more times)\n", repeats);
+        last = s;
+        repeats = 0;
         SYSTEMTIME t;
         GetLocalTime(&t);
         fprintf(g_engine_log, "[%02d:%02d:%02d.%03d] ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
@@ -337,7 +345,10 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     snprintf(buf, sizeof(buf), "engine: spawn_player slot %d from %p '%s' (server %p, players %d, ok %d)",
                              slot, player, entity_name(player), server, g_players ? g_players->size : -1, ok);
                     LOG_INFO(buf);
-                    if (ok && player && server && g_players && slot < g_players->size) {
+                    if (g_players && slot < g_players->size &&
+                        *(uint16_t*)((uint8_t*)g_players->array + slot * 0x70 + 0x64) != 0xFFFF) {
+                        LOG_INFO("engine: spawn_player skipped, slot already has an actor");
+                    } else if (ok && player && server && g_players && slot < g_players->size) {
                         struct { void* data; uint16_t cap; uint16_t size; } list{};
                         void* src = *(void**)(player + 0xA0);  // entity's handle object
                         void* none = nullptr;
@@ -426,11 +437,26 @@ static void* __fastcall host_create_hook(uint32_t* addr, size_t peers, size_t ch
 using spp_t = uint64_t(__fastcall*)(uint32_t, void*);
 static spp_t g_spp_orig = nullptr;
 
+static std::atomic<uint32_t> g_auto_spawn_s{0};
+static std::atomic<int> g_spawn_slot{-1};
+static std::atomic<uint64_t> g_spawn_at{0};
+void engine_set_auto_spawn(uint32_t delay_s) { g_auto_spawn_s = delay_s; }
+void engine_tick() {
+    // shortcut: one pending spawn at a time; a second peer joining within the delay replaces the first one's
+    int slot = g_spawn_slot;
+    if (slot >= 0 && GetTickCount64() >= g_spawn_at && g_spawn_slot.compare_exchange_strong(slot, -1))
+        engine_exec("@spawn_player " + std::to_string(slot));
+}
+
 static uint64_t __fastcall spp_hook(uint32_t pid, void* props) {
     // only the incoming-connection call site: return address bytes = imul r12d, r15d, 70h
-    if (*(uint32_t*)_ReturnAddress() == 0x70E76B45 && pid >= g_players->size) {
-        LOG_INFO("engine: new player slot " + std::to_string(pid) + " (players " + std::to_string(g_players->size) + ")");
-        g_resize(g_players, pid + 1);
+    if (*(uint32_t*)_ReturnAddress() == 0x70E76B45) {
+        if (pid >= g_players->size) {
+            LOG_INFO("engine: new player slot " + std::to_string(pid) + " (players " + std::to_string(g_players->size) + ")");
+            g_resize(g_players, pid + 1);
+        }
+        // the joiner still has to load the host's quick save; spawning ~15 s later worked in every test run
+        if (g_auto_spawn_s) { g_spawn_at = GetTickCount64() + g_auto_spawn_s * 1000ull; g_spawn_slot = (int)pid; }
     }
     return g_spp_orig(pid, props);
 }

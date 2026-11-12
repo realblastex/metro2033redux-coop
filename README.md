@@ -15,7 +15,7 @@ What works:
 - The host turns a running single-player level into a network game. The client connects, loads the host's level
   from the host's quick save, and both stay in gameplay.
 - The host's player character is linked to network slot 0. The host's movement replicates to the client.
-- The joining player gets its own body (`@spawn_player 1` on the host). The client sees the host's Artyom walk around
+- The joining player gets its own body (the host spawns it automatically 15 s after the join). The client sees the host's Artyom walk around
   from its own camera. The client walks its own body with its own input, and the host sees that body move.
 - Both instances are driven without a human. A fake XInput pad and console commands run from a config file.
 - Fast start takes about 30 s from launch to both players in-game.
@@ -88,10 +88,12 @@ Output: `build\Release\metro_coop.dll` and `build\Release\injector.exe`.
    apart from your real Steam saves. Do not run tests against your real Steam save folder.
 4. Run host and client:
    ```
-   scripts\set_ini.ps1 host "exec_on_start=@wait_log playing video 30;@wait 1;@pad 1000 0 0 200;@wait 2;@pad 0010 0 0 200;@wait 2;@pad 1000 0 0 200;@wait 2;gameload coop_start;@wait_log load save bin 30;@wait 1;@finish_load;@wait 1;@unpause_all;@wait 4;@net_host;@wait 1;@players 1;@link_actor;@wait_log incoming connection 60;@wait 15;@spawn_player 1;@wait 5;@pad 0 0 32000 4000" exec_delay_s=0
+   scripts\set_ini.ps1 host "exec_on_start=@wait_log playing video 30;@wait 1;@pad 1000 0 0 200;@wait 2;@pad 0010 0 0 200;@wait 2;@pad 1000 0 0 200;@wait 2;gameload coop_start;@wait_log load save bin 30;@wait 1;@finish_load;@wait 1;@unpause_all;@wait 4;@net_host;@wait 1;@players 1;@link_actor;@wait_log incoming connection 60;@wait 20;@pad 0 0 32000 4000;@wait 40;@pad 0 0 0 1500 32000 0" exec_delay_s=0
    scripts\set_ini.ps1 client "exec_on_start=@wait_log playing video 30;@wait 20;connect 127.0.0.1;@wait_log mapstate_loaded_and_waiting 60;@mp 1;@wait 1;@finish_load;@wait 1;@unpause_all;@wait 20;@teleport 1 0 0;@wait 15;@pad 0 0 32000 4000;@wait 6;@pad 0 32000 0 3000" exec_delay_s=0 engine_bind_port=1001
-   scripts\run_test.ps1 -Client -Wait 110
+   scripts\run_test.ps1 -Client -Wait 125
    ```
+   The host spawns the client's body by itself 15 s after the client connects (`auto_spawn_s`). The host walks
+   forward and later turns around; its screenshot then shows the client's body.
 5. Check the heartbeat lines. Per instance, logs are in `%LOCALAPPDATA%\MetroCoop\<game folder name>\`:
    `metro_coop.log` (ours) and `engine.log` (every engine log line).
 
@@ -106,6 +108,7 @@ allowing it. LAN play will need it allowed.
 | `exec_delay_s` | 5 | seconds after injection before `exec_on_start` starts |
 | `keep_active` | true | keep running while the window is unfocused |
 | `engine_bind_port` | 0 | engine UDP port (0 = 1000); use 1001 for a second instance on the same PC |
+| `auto_spawn_s` | 15 | host: spawn a body for a joining player this many seconds after it connects (0 = off) |
 
 `@`-commands:
 

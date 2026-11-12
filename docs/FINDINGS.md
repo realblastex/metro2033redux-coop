@@ -124,7 +124,9 @@ null. In plain single player the guard must stay off: it crashed save loads at R
 
 ### 5.1 What works (verified 2026-11-12, two runs)
 
-`@spawn_player [slot]` on the host, run after the client joined (`@wait_log incoming connection`, then ~15 s):
+`@spawn_player [slot]` on the host, run after the client joined (`@wait_log incoming connection`, then ~15 s). Since
+10:10 the host does this by itself: the incoming-connection hook queues it `auto_spawn_s` (15) seconds later
+(verified). It skips slots that already have an actor.
 1. `FUN_1406a9a80(g_server, &src_handle, &list, 0xFFFF)` builds the clone list from the SP player (the actor the aim
    hook found). `src_handle` = the entity's handle object, `*(entity+0xA0)`. `list` = `{u16 triples*, u16 cap,
    u16 size}`, triple = `{src id, new id, parent}`. Result: 20 entities (the player and its children), root new id

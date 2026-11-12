@@ -31,4 +31,9 @@ bool engine_wait_log_hit();
 // Changes the engine's local ENet bind port (default 1000). Needed for a second instance on the same PC.
 bool engine_set_bind_port(uint16_t port);
 
+// Host: when a peer connects, queue "@spawn_player <its slot>" delay_s seconds later (0 = off).
+// engine_tick() (called from the DLL's loop) fires it.
+void engine_set_auto_spawn(uint32_t delay_s);
+void engine_tick();
+
 } // namespace metro_coop
