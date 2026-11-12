@@ -24,6 +24,7 @@ struct Config {
     bool keep_active = true;        // keep running while the window is unfocused (network play needs this)
     uint16_t engine_bind_port = 0;  // 0 = engine default 1000; e.g. 1001 for a second instance on the same PC
     uint32_t auto_spawn_s = 15;     // host: spawn a body for a joining player this many seconds after it connects (0 = off)
+    std::string join_address = "127.0.0.1";  // F11 joins this host
 };
 
 static std::string trim(const std::string& s) {
@@ -38,7 +39,7 @@ static Config load_config(const std::string& path) {
     if (!in) {
         std::ofstream out(path);
         out << "; Metro 2033 Redux co-op - see README for exec_on_start commands\n"
-               "exec_on_start = \nexec_delay_s = 5\nkeep_active = true\nengine_bind_port = 0\nauto_spawn_s = 15\n";
+               "exec_on_start = \nexec_delay_s = 5\nkeep_active = true\nengine_bind_port = 0\nauto_spawn_s = 15\njoin_address = 127.0.0.1\n";
         return c;
     }
     for (std::string line; std::getline(in, line);) {
@@ -51,6 +52,7 @@ static Config load_config(const std::string& path) {
         else if (k == "keep_active") c.keep_active = v == "true" || v == "1";
         else if (k == "engine_bind_port") c.engine_bind_port = (uint16_t)strtoul(v.c_str(), nullptr, 0);
         else if (k == "auto_spawn_s") c.auto_spawn_s = (uint32_t)strtoul(v.c_str(), nullptr, 0);
+        else if (k == "join_address") c.join_address = v;
     }
     return c;
 }
@@ -116,6 +118,13 @@ public:
         }
     }
 
+    // runs after whatever is still queued (hotkeys)
+    void push(const std::string& c) {
+        if (pos_ > cmds_.size()) pos_ = cmds_.size();
+        if (!cmds_.empty() && cmds_.back() != ';') cmds_ += ';';
+        cmds_ += c;
+    }
+
 private:
     std::string cmds_;
     size_t pos_ = 0;
@@ -160,6 +169,16 @@ static DWORD WINAPI main_thread(LPVOID) {
     ExecRunner exec(cfg);
     g_running = true;
     for (uint64_t tick = 1; g_running; ++tick) {
+        // F9 = host (on a loaded single-player level), F11 = join join_address (F10 hung the client during connect: the game uses it); only while our window is in front
+        static bool f9 = false, f11 = false;
+        bool front = false;
+        DWORD pid = 0;
+        if (HWND fg = (HWND)engine_real_foreground_window()) GetWindowThreadProcessId(fg, &pid);
+        front = pid == GetCurrentProcessId();
+        bool k9 = front && (GetAsyncKeyState(VK_F9) & 0x8000), k11 = front && (GetAsyncKeyState(VK_F11) & 0x8000);
+        if (k9 && !f9) { LOG_INFO("hotkey F9: host"); exec.push("@host"); }
+        if (k11 && !f11) { LOG_INFO("hotkey F11: join " + cfg.join_address); exec.push("@join " + cfg.join_address); }
+        f9 = k9; f11 = k11;
         exec.tick();
         engine_tick();
         if (tick % 625 == 0) LOG_INFO("heartbeat: " + engine_stats());  // ~10 s; tests read state from here

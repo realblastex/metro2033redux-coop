@@ -101,6 +101,18 @@ Output: `build\Release\metro_coop.dll` and `build\Release\injector.exe`.
 Windows Firewall asks about network access the first time `metro.exe` binds UDP port 1000. Loopback works without
 allowing it. LAN play will need it allowed.
 
+## Try it by hand (two copies on one PC)
+
+1. Start both copies with `injector --launch` and inject the DLL (as `scripts\run_test.ps1` does). Set
+   `engine_bind_port = 1001` in the second copy's `metro_coop.ini`.
+2. Copy 1: load a save (or start a new game) and wait until you are in gameplay. Press **F9**: it becomes the host.
+3. Copy 2: at the main menu press **F11**: it joins `join_address` (default `127.0.0.1`), loads the host's level and
+   gets its own body about 15 s later.
+
+Verified 10:30 with key presses sent by a script (F9 on the host, F11 on the client). The hotkeys only react while
+that copy's window is in front. F10 is not usable: the game itself reacts to it, and a join started with F10 hung the
+client.
+
 ## Config: `metro_coop.ini`
 
 | key | default | meaning |
@@ -109,6 +121,7 @@ allowing it. LAN play will need it allowed.
 | `exec_delay_s` | 5 | seconds after injection before `exec_on_start` starts |
 | `keep_active` | true | keep running while the window is unfocused |
 | `engine_bind_port` | 0 | engine UDP port (0 = 1000); use 1001 for a second instance on the same PC |
+| `join_address` | 127.0.0.1 | host address for F11 |
 | `auto_spawn_s` | 15 | host: spawn a body for a joining player this many seconds after it connects (0 = off) |
 
 `@`-commands:
