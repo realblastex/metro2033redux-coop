@@ -143,5 +143,5 @@ Useful engine console commands: `disconnect`, `server`, `map 2033\l01_hunter`, `
 
 ## License
 
-Not chosen yet. Until a license file is added, all rights are reserved by the repo owner. Third-party code keeps its
-own license.
+MIT, see [LICENSE](LICENSE). Third-party code keeps its own license (MinHook: BSD-2-Clause,
+`third_party/minhook/LICENSE.txt`). Game files are not covered and are not part of this repo.
