@@ -41,9 +41,11 @@ What does not work yet:
 - No AI or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only
   over loopback.
 
-QA level: automated smoke test. `scripts\smoke_test.ps1 [-Save coop_start|coop_l19]` runs both copies and checks 8
-facts from the logs (both alive, no crash, body spawned and linked, client controls it, both movements seen, positions
-equal on both sides). Last runs: Hunter and `l19_defence` `RESULT: PASS (8 checks)`. Longest manual run: ~4 min of
+QA level: automated smoke test. `scripts\smoke_test.ps1 [-Save coop_start|coop_l19] [-Respawn]` runs both copies and
+checks 8 facts from the logs (both alive, no crash, body spawned and linked, client controls it, both movements seen,
+positions equal on both sides); `-Respawn` adds a kill of the client by the host and checks the automatic respawn
+(10 checks). Last runs: Hunter and `l19_defence` `RESULT: PASS (8 checks)`, `l19_defence -Respawn`
+`RESULT: PASS (10 checks)`. Longest manual run: ~4 min of
 co-op, 24 moves, both alive, final positions equal on both sides.
 
 Verified test run (log lines from `metro_coop.log`, host then client):

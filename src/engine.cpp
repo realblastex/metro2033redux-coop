@@ -297,8 +297,13 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     continue;
                 }
                 if (c.rfind("@aim ", 0) == 0) {
-                    unsigned id = 0xFFFF, ms = 3000;
-                    sscanf_s(c.c_str() + 5, "%x %u", &id, &ms);
+                    unsigned id = 0xFFFF, ms = 3000;  // "@aim <id hex|s<slot>> [ms]"
+                    int slot = -1;
+                    if (c[5] == 's') {
+                        sscanf_s(c.c_str() + 6, "%d %u", &slot, &ms);
+                        if (g_players && slot >= 0 && slot < g_players->size)
+                            id = *(uint16_t*)((uint8_t*)g_players->array + slot * 0x70 + 0x64);
+                    } else sscanf_s(c.c_str() + 5, "%x %u", &id, &ms);
                     aim_command(id, ms);
                     continue;
                 }
