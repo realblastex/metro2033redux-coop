@@ -15,8 +15,11 @@ yet exercised, **unknown** = not found yet.
 - Both instances stay alive in gameplay. The client crash at RVA 0x39A2FD is fixed (see 3.4).
 - The joining player gets a body of its own (`@spawn_player 1` on the host after the client joined, see 5). Slot 1 is
   linked to the new entity (id 0x10B) on both sides. The client sees the host's Artyom walk away from its own camera.
-- The client's own input does not move its body yet. A 6 s backward pad input moved slot 1 by 0.1 m. **This is the
-  next problem.**
+- The client controls its own body and its movement replicates to the host (verified 09:56): client pad forward 4 s
+  moved slot 1 from x=-7.3 to -5.1, strafe moved z from -15.7 to -16.4, and the host's copy of slot 1 shows the same
+  values.
+- **Next problems:** the host has not been checked to render the client's body (needs a camera turn: `@pad` has no
+  right stick yet). Both bodies spawn on the same spot. Combat, AI, doors and story events are not checked.
 
 ## 2. How the pieces fit (verified unless marked)
 
@@ -84,8 +87,11 @@ focus. `PostMessage(WM_KEYDOWN)` does nothing.
   0x6B8E30), any other value links it (RVA 0x6B89F0).
 
 ### 3.3 Finding the local player (verified)
-- `*(g_level+0x38)` (g_level RVA 0xFBD820) is **null** in single-player gameplay. Scripts reach the player through
-  graph links instead (RVA 0x735B30).
+- `*(g_level+0x38)` (g_level RVA 0xFBD820) is the entity this instance controls (entity base; id = u16 at +0x108).
+  Correction: an earlier read said it is null in single-player gameplay. The heartbeat (`ctl=`) shows id 0 on the
+  host after the save loads. On the client it is null until its body spawns, then it is 0x10B. A client's send job
+  (RVA 0x6B4D00) sends its state (msg 0, 31 bytes, ~15 Hz) only while it is set. Scripts reach the player through
+  graph links (RVA 0x735B30).
 - The actor aim update RVA 0x399DD0 (only caller RVA 0x399A30) runs per frame on the player. It is hooked to remember
   the actor. Handles point at **entity+0xA0**. The entity id is the u16 at (entity+0xA0)+0x68. The name is the
   string object at (entity+0xA0)+0x110, with chars at +0x14. The menu level has its own actor, so the list is
@@ -126,10 +132,12 @@ null. In plain single player the guard must stay off: it crashed save loads at R
 Result: heartbeat `s1=10B/5` on both sides. The client's screenshot shows the host's Artyom from the client's camera,
 and he walks away when the host moves.
 
+After the spawn event the client's controlled entity (`*(g_level+0x38)`) is the new body (0x10B). The client's pad
+moves it, and the client sends its state to the host, which applies it to slot 1 (client-authoritative movement).
+An early run looked like "input does nothing": a backward input hit a wall behind the start spot, and a forward
+input was blocked by the host's body standing on the same spot.
+
 Problems seen:
-- The client's own pad input does not move slot 1 (verified). The cause is unknown. Next: find how pad input
-  reaches an actor in MP (`net_core::update_input`, client→host input packets) and which entity the client's camera
-  and input use. The client still has the SP `player` (id 0) from the quick save.
 - The client logs `!G entity_players_knife: player is absent` / `entity_players_torch: player is absent` once at the
   spawn.
 - The host logs `!No ammo item. Save level, bleat !!!` hundreds of thousands of times, starting right after

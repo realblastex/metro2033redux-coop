@@ -678,6 +678,23 @@ static void install_netframe_counter() {
     LOG_INFO(std::string("engine: enet event log ") + (sv ? "on" : "NOT FOUND"));
 }
 
+// *(g_level+0x38) = the entity this instance controls (a client's send job only sends while it is set, RVA
+// 0x6B4D00). Id at +0x108 (+0xA0+0x68); position guessed as the transform translation at +0xA0+0x50.
+static void ctl_str(char* b, size_t n) {
+    uint8_t* level = g_level_signal ? *(uint8_t**)((uint8_t*)g_level_signal + 0x21 + *(int32_t*)((uint8_t*)g_level_signal + 0x1D)) : nullptr;
+    __try {
+        uint8_t* e = level ? *(uint8_t**)(level + 0x38) : nullptr;
+        if (e) snprintf(b, n, " ctl=%X@(%.1f,%.1f,%.1f)", *(uint16_t*)(e + 0x108), *(float*)(e + 0xF0),
+                        *(float*)(e + 0xF4), *(float*)(e + 0xF8));
+        else snprintf(b, n, " ctl=none");
+        for (uint8_t* a : g_seen_actors) {  // actors the aim hook saw, same layout
+            size_t used = strlen(b);
+            if (a && used < n) snprintf(b + used, n - used, " a%X@(%.1f,%.1f)", *(uint16_t*)(a + 0x108),
+                                        *(float*)(a + 0xF0), *(float*)(a + 0xF8));
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { snprintf(b, n, " ctl=?"); }
+}
+
 // per net player: actor id (+0x64), state bits (+0x68 >> 16 & 7; 4 = waiting for actor, 5 = linked), net pos (+0x48)
 static std::string slots_str() {
     std::string s;
@@ -688,7 +705,9 @@ static std::string slots_str() {
                  *(float*)(p + 0x48), *(float*)(p + 0x4C), *(float*)(p + 0x50));
         s += b;
     }
-    return s;
+    char b[256];
+    ctl_str(b, sizeof(b));
+    return s + b;
 }
 
 std::string engine_stats() {
