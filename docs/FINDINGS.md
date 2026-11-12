@@ -49,8 +49,9 @@ yet exercised, **unknown** = not found yet.
   `* relevant: <name>` to engine.log). Nothing registers during a plain SP load (list empty until `@host`).
   Conditions: MP flag set; entity vtbl+0xB80 == 0 (not destroyed); vtbl+0xB88 != 0 (active); flags `+0x10C & 0x204
   == 4`; priority vtbl+0x170 ≥ 0. Low-priority entities also need `*(g_level+0x220) ≥ 5`. Max 256 entities
-  (`!too many network synch entities`). Guess: the host's `nosalis` were inactive at `@host` time and register when
-  they wake. Check with the `* relevant:` lines during the intro attack.
+  (`!too many network synch entities`). Runtime registration (derived): the activate/deactivate update RVA 0x6D6DA0
+  calls make-relevant when an entity becomes active and unregisters it (RVA 0x747CA0) when it goes inactive; the
+  attach/detach path RVA 0x6DD360 does the same. The client's 12 extra entries are dormant: see 5.4.
 - **Next problems:** combat (damage between players, NPCs targeting the client), AI, doors and story events are not
   checked. Level transitions, save/load and LAN are not tested.
 
@@ -192,6 +193,36 @@ Problems seen:
   copies the transform (entity vtbl+0x190).
 - RVA 0x6951C0 = "spawn N copies" (server only): a9a80 per copy, then ba940 with is_player=0. It has 24 callers in
   game code.
+
+### 5.4 Monsters, spawned copies, doors, items (session 6, 2026-11-12)
+
+`@dump` now prints `f=` (u32 flags at entity+0x10C) and `b6=`/`b7=` (bytes written by RVA 0x6D6DA0; b6=1 seen only on
+active entities).
+
+Verified (two-instance runs 13:25–13:45):
+- Flag bits seen: 0x8 = networked (set on `special_nosalis_hunter_0000` by `@host`, f 7 → F); 0x10000 = spawned
+  copy (every clone); 0x2 on a `player` = the other instance's body (host: 0 f=D, 0x10B f=1000F; client: 0 f=F,
+  0x10B f=1000D); 0x100 on `player_map_*` = the local player's map. 0x20 is set on the dormant intro monsters.
+- The client's 12 extra net-list entries (5.1/1) are dormant: the nine `nosalis_side*` / `nosalis_top` have f=0x27,
+  b6=0 on **both** sides, same positions. The client never clears them from its list, but nothing moves them.
+- Active monster replicates: the host moved `special_nosalis_hunter_0000` (0x6A37, b6=1, networked) by
+  (31,-11.5,4) with `@teleport … 6A37`; the client's copy showed the same position (-1.25,-4.42,3.65) at its first
+  check ~14 s later and kept it. This nosalis is scripted/idle; it did not attack.
+- Spawned copies replicate: new `@spawn <id hex>` on the host (same path as `@spawn_player`, but `is_player=0`,
+  slot -1, arg7=1 like the script spawner RVA 0x4F7050 → RVA 0x6951C0) cloned `ai_nosalis_actor_0026` (0xAA1D) as
+  0x463 on **both** sides (same id, position, f=0x1E000). The copy stays inactive (b6=0) and is not networked; a host
+  `@teleport` of it cleared f 0xE000 but the client copy did not move. The `ai_nosalis_*` entities (f=0xE000, 50 of
+  them near x -52..-65) look like spawn templates. How a spawned monster gets woken is **unknown** (activity mask =
+  entity vtbl+0x660, RVA 0x6D7200).
+- Doors are not networked: 40 `*door*` entities in Hunter, all f=0x4003 / 0x4103 (`door_use_*`), b6=0, no 0x8 bit,
+  except `door_guard_hospital` / `door_hospital_living_1` (f=0xE003, b6=1). A door test failed to aim: X pressed near
+  `door_use_0003` with the camera facing a wall; no state change on either side. Untested.
+- The client's body has no knife: the clone (20 entities) contains `player_torch_0022` (0x20A),
+  `torch_podsvet_0012`, `players_hands_0012`, `player_map_0005` and timers. `players_knife_0009` (0x1F, at the
+  origin, f=0x4002) is not a child of `player`, so it is not cloned. Matches the client log
+  `entity_players_knife: player is absent`.
+- Combat is not testable from the fast-start save: weapons are holstered in the station (`take_item
+  [unarmed_box]`), and no monster attacks early in Hunter.
 
 ### 5.3 Older notes (static, before the run)
 

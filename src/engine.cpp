@@ -86,6 +86,16 @@ static const char* entity_name(uint8_t* e) {
     } __except (EXCEPTION_EXECUTE_HANDLER) { return "?"; }
 }
 
+// g_server's entity with this id (table *(g_server+0x10), 16-byte entries, entity at +8, count u16 at +0x1A), or null
+static uint8_t* entity_by_id(unsigned id) {
+    uint8_t* server = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD850);  // shortcut: fixed RVA
+    for (int i = 0; server && i < *(uint16_t*)(server + 0x1A); ++i) {
+        uint8_t* x = *(uint8_t**)(*(uint8_t**)(server + 0x10) + i * 16 + 8);
+        if (x && *(uint16_t*)(x + 0x108) == id) return x;
+    }
+    return nullptr;
+}
+
 static void __fastcall slog_hook(const char* s) {
     if (s && !g_wait_hit) {
         std::lock_guard<std::mutex> lock(g_wait_mutex);
@@ -328,7 +338,9 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     }
                     continue;
                 }
-                if (c.rfind("@spawn_player", 0) == 0) {
+                if (c.rfind("@spawn_player", 0) == 0 || c.rfind("@spawn ", 0) == 0) {
+                    // "@spawn <id hex>" (server only): same path for any entity, with is_player=0 and slot -1 like
+                    // the engine's "spawn N copies" (RVA 0x6951C0, call at RVA 0x69547D).
                     // "@spawn_player [slot]" (server only): spawn a copy of the SP player for net player <slot>
                     // (default 1) the way the engine's player spawner (RVA 0x6F6210) does it: build clone id triples
                     // {src id, new id, parent} with RVA 0x6A9A80, then queue a reliable spawn event with RVA 0x6BA940
@@ -336,19 +348,22 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     // RVA 0x6B2490 and replicated to clients).
                     // shortcut: fixed RVAs for one exe build (SHA-256 097df1a2...), checked by prologue bytes.
                     int slot = 1;
-                    sscanf(c.c_str() + 13, "%d", &slot);
+                    unsigned src_id = 0xFFFF;
+                    bool is_player = c[6] == '_';
+                    if (is_player) sscanf(c.c_str() + 13, "%d", &slot);
+                    else { sscanf(c.c_str() + 7, "%x", &src_id); slot = -1; }
                     uint8_t* exe = (uint8_t*)GetModuleHandleA(nullptr);
-                    uint8_t* player = g_seen_actors[0];
+                    uint8_t* player = is_player ? g_seen_actors[0] : entity_by_id(src_id);
                     void* server = *(void**)(exe + 0xFBD850);
                     bool ok = exe[0x6A9A80] == 0x66 && exe[0x6BA940] == 0x48 && exe[0x6BA941] == 0x8B;
                     char buf[200];
                     snprintf(buf, sizeof(buf), "engine: spawn_player slot %d from %p '%s' (server %p, players %d, ok %d)",
                              slot, player, entity_name(player), server, g_players ? g_players->size : -1, ok);
                     LOG_INFO(buf);
-                    if (g_players && slot < g_players->size &&
+                    if (is_player && g_players && slot < g_players->size &&
                         *(uint16_t*)((uint8_t*)g_players->array + slot * 0x70 + 0x64) != 0xFFFF) {
                         LOG_INFO("engine: spawn_player skipped, slot already has an actor");
-                    } else if (ok && player && server && g_players && slot < g_players->size) {
+                    } else if (ok && player && server && g_players && (!is_player || slot < g_players->size)) {
                         struct { void* data; uint16_t cap; uint16_t size; } list{};
                         void* src = *(void**)(player + 0xA0);  // entity's handle object
                         void* none = nullptr;
@@ -360,8 +375,9 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         uint16_t root = n ? ((uint16_t*)list.data)[(n - 1) * 3 + 1] : 0xFFFF;
                         snprintf(buf, sizeof(buf), "engine: spawn_player %u entities, root new id 0x%X", n, root);
                         LOG_INFO(buf);
-                        if (n) ((spawn_ev_t)(exe + 0x6BA940))(nullptr, 0, &list, &src, &none, &none, 0, 1, slot, 0, 0,
-                                                             nullptr, nullptr);
+                        // arg7 (event word5 bit 0): script spawners (e.g. RVA 0x4F7050) pass 1, the player spawn 0
+                        if (n) ((spawn_ev_t)(exe + 0x6BA940))(nullptr, 0, &list, &src, &none, &none, !is_player, is_player, slot,
+                                                             0, 0, nullptr, nullptr);
                         // shortcut: list.data leaks (a few bytes per spawn); the engine frees it with its own allocator.
                     }
                     continue;
@@ -383,9 +399,12 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                                 in = *(uint16_t*)(*(uint8_t**)(nc + 0x168) + k * 16) == *(uint16_t*)(e + 0x108);
                             if (!in) continue;
                         } else if (!filter.empty() && !strstr(name, filter.c_str())) continue;
-                        char buf[160];
-                        snprintf(buf, sizeof(buf), "engine: dump %X '%s' (%.2f,%.2f,%.2f)", *(uint16_t*)(e + 0x108), name,
-                                 *(float*)(e + 0xF0), *(float*)(e + 0xF4), *(float*)(e + 0xF8));
+                        char buf[200];
+                        // f = flags +0x10C (8 = networked, 0x20/0x204 checked by make-relevant RVA 0x747F60);
+                        // b6/b7 = bytes written by the activate/deactivate update RVA 0x6D6DA0
+                        snprintf(buf, sizeof(buf), "engine: dump %X '%s' (%.2f,%.2f,%.2f) f=%X b6=%u b7=%u",
+                                 *(uint16_t*)(e + 0x108), name, *(float*)(e + 0xF0), *(float*)(e + 0xF4),
+                                 *(float*)(e + 0xF8), *(uint32_t*)(e + 0x10C), e[0xB6], e[0xB7]);
                         LOG_INFO(buf);
                         ++shown;
                     }
@@ -402,14 +421,7 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     sscanf_s(c.c_str() + 9, "%f %f %f %x", &d[0], &d[1], &d[2], &id);
                     uint8_t* level = g_level_signal ? *(uint8_t**)((uint8_t*)g_level_signal + 0x21 + *(int32_t*)((uint8_t*)g_level_signal + 0x1D)) : nullptr;
                     uint8_t* e = level ? *(uint8_t**)(level + 0x38) : nullptr;
-                    if (id != 0xFFFF) {
-                        e = nullptr;
-                        uint8_t* server = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD850);  // shortcut: fixed RVA
-                        for (int i = 0; server && i < *(uint16_t*)(server + 0x1A) && !e; ++i) {
-                            uint8_t* x = *(uint8_t**)(*(uint8_t**)(server + 0x10) + i * 16 + 8);
-                            if (x && *(uint16_t*)(x + 0x108) == id) e = x;
-                        }
-                    }
+                    if (id != 0xFFFF) e = entity_by_id(id);
                     if (e) {
                         alignas(16) float m[16];
                         memcpy(m, e + 0xC0, sizeof(m));

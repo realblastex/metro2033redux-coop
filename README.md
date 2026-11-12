@@ -25,8 +25,11 @@ What does not work yet:
 - Both bodies spawn on the same spot; the client moves itself away with `@teleport`. See
   [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
 - NPCs near the players replicate from the host (distance priority, ~128 bytes per packet); far NPCs did not update
-  within 15 s. Combat, doors and story events are not checked between players.
-- No AI, door or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only
+  within 15 s. An active monster moved on the host shows up on the client. Entities the host spawns (`@spawn`) exist on
+  both sides with the same id.
+- The client's body has no knife (the torch is there). Doors are not in the network list; door use between players is
+  untested. Combat is untested (weapons are holstered at the start of Hunter, and a spawned monster stays asleep).
+- No AI or story-event sync has been checked. No level transitions. Not tested over LAN or the Internet, only
   over loopback.
 
 QA level: manual bot runs (scripted, log-checked). There is no automated suite yet. Longest run: ~4 min of co-op,
@@ -143,7 +146,8 @@ client.
 | `@link_actor [slot] [id hex]` | link a net player slot to an actor (default: slot 0 + the local player) |
 | `@spawn_player [slot]` | host only: spawn a copy of the local player as the body of net slot `slot` (default 1) |
 | `@teleport <dx> <dy> <dz> [id hex]` | move the entity this instance controls (or entity `id`) by an offset (metres) |
-| `@dump [filter]` | log id, name and position of entities whose name contains `filter` (diagnostics) |
+| `@spawn <id hex>` | host only: spawn a copy of entity `id` through the engine's network spawn event (diagnostics) |
+| `@dump [filter]` | log id, name, position and flags of entities whose name contains `filter` (diagnostics) |
 | `@signal <name>` | raise a level signal |
 | `@watch <rva hex>` / `@watch_slot <n>` / `@watch_net_time` | hardware write-watchpoints (diagnostics) |
 
