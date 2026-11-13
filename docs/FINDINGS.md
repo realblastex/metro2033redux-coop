@@ -530,7 +530,10 @@ Open:
   restart. On the 4th rejoin the client crashed right after loading the host's level (AV executing a garbage
   address, load stack RVA 0x331E7) during the attack. Unknown whether that is new; the joins before it worked.
 - Unknown why the MP flag changes the save stream, and why the body breaks the load.
-- Checkpoints while hosting still write the player's real `auto_save` (now loadable, but with the co-op state).
+- Fixed (session 10): a checkpoint while hosting (save name `auto_save`, MP flag set) is renamed to `coop_auto_save`
+  in the save hook, and a host death restarts from that. Verified (`coop_ch3`, launcher): `save 'coop_auto_save'
+  mp=1` after the vision, host died, restarted with `gameload coop_auto_save`, hosted, client rejoined
+  (`local_idx=1`); the emulator's `2033_auto_save` kept its old time stamp.
 
 ### 5.11 Story level changes (session 9, 2026-11-13)
 
@@ -575,6 +578,13 @@ restarted, joined the host's l04 and controlled its body (`ctl=26D`, screenshot 
 Open:
 - The carried-over inventory is lost for the host on every level change (to fix: re-id the items, or find why
   the ids break the client).
+  Derived (session 10, decompile): 0x3CA400 reads `chunk_player_data` -> `entities` with RVA 0x6A59D0, which
+  creates each record with RVA 0x6A5B90 and then remaps links (entity vtbl+0xB70) through an old->new id map.
+  In 0x6A5B90 a record id below 0x100 is kept as is: it is reserved in a separate low-id pool at g_server+0x120
+  (RVA 0x4B5F0; fallback RVA 0x4B170, int3 if the id differs) and never enters the map. Ids from 0x100 up go
+  through the map and get fresh ids (RVA 0x4BBE0: pool at g_server+0x148, + 0x100). So the `.player` file stores
+  the body's items with low ids on purpose (carry-over id space); they keep them in every later save.
+  Records with no parent (parent id 0xFFFF) are also passed to RVA 0x747F60 (the engine net list).
 - Only `change_map` from the console was tested, not a level's own end trigger (`triggers/game/next level`).
 - The client's level change costs a game restart (~40 s). In a long-running host process the player slots keep
   growing when a client rejoins before the old peer timed out (seen: `players=5` with a looping client).

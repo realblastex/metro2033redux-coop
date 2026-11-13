@@ -225,7 +225,7 @@ static DWORD WINAPI main_thread(LPVOID) {
             LOG_ERROR("launcher start failed: " + std::to_string(GetLastError()));
         };
         uint64_t now = GetTickCount64();
-        // Host died: restart and load the last checkpoint this game wrote while hosting ("auto_save", written
+        // Host died: restart and load the last checkpoint this game wrote while hosting ("coop_auto_save", written
         // loadable since FINDINGS 5.10), else "coop_session" (written by @host). The client loses the host and
         // restarts too (below).
         // shortcut: a down/revive system may replace this later.
@@ -233,7 +233,7 @@ static DWORD WINAPI main_thread(LPVOID) {
         if (engine_host_dead()) {
             if (!dead_since) dead_since = now;
             if (now - dead_since > 4000) {
-                const char* save = engine_checkpoint_saved() ? "auto_save" : "coop_session";
+                const char* save = engine_checkpoint_saved() ? "coop_auto_save" : "coop_session";
                 LOG_INFO(std::string("host died: restarting from ") + save);
                 SetEnvironmentVariableA("METRO_COOP_LOAD", save);
                 restart("--host");

@@ -153,6 +153,8 @@ static uintptr_t __fastcall save_hook(void* mgr, const char* name) {
         LOG_INFO(std::string("engine: save '") + (name ? name : "?") + "' skipped (client)");
         return 0;
     }
+    // Checkpoints while hosting go to their own slot so the player's real "auto_save" keeps their own progress
+    if (mp && name && !strcmp(name, "auto_save")) name = "coop_auto_save";
     // RVA 0x672130 drops a request while +0x1D90 is busy, so only a request that gets queued clears the flag
     int busy = *(int*)((uint8_t*)mgr + 0x1D90);
     LOG_INFO(std::string("engine: save '") + (name ? name : "?") + "' mp=" + std::to_string(mp) + " state=" + std::to_string(busy));
@@ -161,7 +163,7 @@ static uintptr_t __fastcall save_hook(void* mgr, const char* name) {
     if (mp && !g_save_since && *(int*)((uint8_t*)mgr + 0x1D90) == 1 && busy != 1) {
         *g_mp_flag = 0;
         g_save_since = GetTickCount64();
-        if (name && !strcmp(name, "auto_save")) g_checkpoint_saved = true;
+        if (name && !strcmp(name, "coop_auto_save")) g_checkpoint_saved = true;
     }
     return r;
 }

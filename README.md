@@ -29,22 +29,22 @@ What works:
 - Handcar ride on `l03_chase` (early story): the client's body rides along with the host's handcar
   (FINDINGS 5.8). `scripts\smoke_test.ps1 -Save coop_ch3` passes. The nosalis attack on the handcar kills the host
   with the single-player death screen; the client rides on (host death handling is not done).
-- Host death: both games restart and load the host's last checkpoint (`auto_save`, or `coop_session` = the save
+- Host death: both games restart and load the host's last checkpoint (`coop_auto_save`, or `coop_session` = the save
   made when hosting started if no checkpoint came since), then the host hosts and the client joins again by
   themselves (about 65 s; FINDINGS 5.9, 5.10).
 - Story level changes: the host goes on to the next level and hosts again there; the client restarts and joins
   the new level by itself (about 40 s). The host starts each new level with that level's own loadout: items
   carried over from the last level are lost (FINDINGS 5.11). Tested with console `change_map`, not yet with a
   level's own end.
-- Checkpoint saves written while hosting load again (FINDINGS 5.10). The joiner's game writes no saves while it is in
-  a session, so its own saves stay untouched.
+- Checkpoint saves written while hosting load again (FINDINGS 5.10). They go to `coop_auto_save`, so the host's
+  own single-player `auto_save` stays untouched. The joiner's game writes no saves while it is in a session, so its
+  own saves stay untouched too.
 - The windows are titled `Metro Redux [host]` and `Metro Redux [client]` after `@host` / `@join`.
   Three game crashes that assume one single player exist were guarded for this (FINDINGS 5.5).
 
 What does not work yet:
 
-- **Back up your saves before hosting.** Checkpoints while you host still replace your `auto_save` with the co-op
-  run's progress (it loads in single player too). A client that joined while a scripted fight was running crashed
+- Back up your saves before hosting anyway (the mod is early). A client that joined while a scripted fight was running crashed
   once on loading the host's level (FINDINGS 5.10).
 
 - Both bodies spawn on the same spot; `@join` then moves the client 1.2 m in front of the host. A wall there would
