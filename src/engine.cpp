@@ -801,7 +801,7 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     // 0x20 = gas mask; applied by RVA 0x25DB20). Items as the slot getter RVA 0x25C740 walks them:
                     // owner = *(*(inv+0x28)+8), handles at owner+0x150 (count u16 +0x15A) -> entity+0xA0; item
                     // interface = entity vtbl+0x6F0, slot byte at item+0xAA, item vtbl+0x48 = usable.
-                    uint8_t* e = entity_by_id(strtoul(c.c_str() + 5, nullptr, 16));
+                    uint8_t* e = c.compare(5, 3, "ctl") == 0 ? controlled() : entity_by_id(strtoul(c.c_str() + 5, nullptr, 16));
                     uint8_t* inv = e ? *(uint8_t**)(e + 0xB70) : nullptr;
                     if (!inv) { LOG_WARN("engine: inv: no entity/inventory"); continue; }
                     uint8_t* owner = *(uint8_t**)(*(uint8_t**)(inv + 0x28) + 8);
@@ -819,6 +819,30 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                             snprintf(b, sizeof(b), "=s%u", item[0xAA]);
                             out += b;
                         }
+                    }
+                    LOG_INFO(out);
+                    continue;
+                }
+                if (c.rfind("@invst ", 0) == 0) {
+                    // diagnostics: "@invst <id hex|ctl>": single-player inventory state stack (FINDINGS 5.7): up to 3
+                    // states of 0x1E0 bytes at inv+0x100, count u16 at inv+0x6A0; state u16 +0 = weapon index (0..3 ->
+                    // slot 1/2/16/6, else 22 = none, RVA 0x4EBE00); plus inv+0x8A8/0x8A9 and the vtbl+0x300 state byte
+                    uint8_t* e = c.compare(7, 3, "ctl") == 0 ? controlled() : entity_by_id(strtoul(c.c_str() + 7, nullptr, 16));
+                    uint8_t* inv = e ? *(uint8_t**)(e + 0xB70) : nullptr;
+                    if (!inv) { LOG_WARN("engine: invst: no entity/inventory"); continue; }
+                    uint8_t st = 0;
+                    using get_t = void(__fastcall*)(void*, uint8_t*);
+                    ((get_t)(*(void***)inv)[0x300 / 8])(inv, &st);
+                    uintptr_t vt = (uintptr_t)*(void**)inv - (uintptr_t)GetModuleHandleA(nullptr);
+                    char b[160];
+                    snprintf(b, sizeof(b), "engine: invst vt=%llX st=%X 8A8=%X 8A9=%X 6B0=%X 6B2=%X n=%u:", (unsigned long long)vt, st,
+                             inv[0x8A8], inv[0x8A9], *(uint16_t*)(inv + 0x6B0), inv[0x6B2], *(uint16_t*)(inv + 0x6A0));
+                    std::string out = b;
+                    for (int k = 0; vt == 0xB2D218 && k < 3; ++k) {
+                        uint8_t* s = inv + 0x100 + k * 0x1E0;
+                        snprintf(b, sizeof(b), " [w%X f%02X%02X%02X %02X%02X%02X%02X%02X%02X%02X]", *(uint16_t*)s, s[0x18], s[0x19],
+                                 s[0x1A], s[0x1B], s[0x1C], s[0x1D], s[0x1E], s[0x1F], s[0x20], s[0x21]);
+                        out += b;
                     }
                     LOG_INFO(out);
                     continue;
@@ -904,10 +928,28 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     LOG_INFO(out);
                     continue;
                 }
+                if (c.rfind("@poke ", 0) == 0) {
+                    // diagnostics: "@poke <id hex|ctl> <offset hex> <size 0|1|2|4> <value hex>": write an entity field
+                    // (size 0 = write nothing), then log the entity's position (+0xF0)
+                    unsigned id = 0, off = 0, size = 0, val = 0;
+                    uint8_t* e = nullptr;
+                    if (c.compare(6, 3, "ctl") == 0) { sscanf(c.c_str() + 9, "%x %u %x", &off, &size, &val); e = controlled(); }
+                    else { sscanf(c.c_str() + 6, "%x %x %u %x", &id, &off, &size, &val); e = entity_by_id(id); }
+                    if (!e) { LOG_WARN("engine: poke: no entity"); continue; }
+                    if (size == 1) e[off] = (uint8_t)val;
+                    else if (size == 2) *(uint16_t*)(e + off) = (uint16_t)val;
+                    else if (size == 4) *(uint32_t*)(e + off) = val;
+                    char b[128];
+                    snprintf(b, sizeof(b), "engine: poke +%X=%X (%u) pos (%.2f,%.2f,%.2f)", off, val, size,
+                             *(float*)(e + 0xF0), *(float*)(e + 0xF4), *(float*)(e + 0xF8));
+                    LOG_INFO(b);
+                    continue;
+                }
                 if (c.rfind("@hexdump ", 0) == 0) {  // diagnostics: "@hexdump <id hex> [len hex]" raw entity bytes
                     unsigned id = 0, len = 0x600;
-                    sscanf(c.c_str() + 9, "%x %x", &id, &len);
-                    uint8_t* e = entity_by_id(id);
+                    uint8_t* e = nullptr;
+                    if (c.compare(9, 3, "ctl") == 0) { sscanf(c.c_str() + 12, "%x", &len); if ((e = controlled())) id = *(uint16_t*)(e + 0x108); }
+                    else { sscanf(c.c_str() + 9, "%x %x", &id, &len); e = entity_by_id(id); }
                     for (unsigned o = 0; e && o < len; o += 32) {
                         char b[160];
                         int n = snprintf(b, sizeof(b), "engine: hex %X +%03X:", id, o);

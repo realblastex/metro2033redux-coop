@@ -425,6 +425,51 @@ In l04_riga's opening bar scene the client's body holds a gun while the host's (
 New diagnostics: `@inv <id>`, `@links <id>`, `@refs <id> [len] [via]`, `@select <id> <state>`, `@detach <id>`,
 `@setflag <id> <clear> <set>`, `@hexdump <id> [len]`.
 
+Session 12 (2026-11-13, build after `6fdc7de`, test: host loads `coop_ch3`, `save_player` + `change_map 2033\l04_riga`,
+client joins about 30 s after the host reaches l04).
+
+Verified:
+- In this test, l04 did not show two guns on the client. The client holds the ubludok, and pad Y switches
+  ubludok, revolver, ubludok cleanly. The client stands on the host's seat in the bar. The host sits unarmed.
+- Single-player inventory class (vtbl RVA 0xB2D218): a stack of up to 3 weapon states, 0x1E0 bytes each, at inv+0x100.
+  The count is a u16 at inv+0x6A0. A state's u16 at +0 is a weapon index; RVA 0x4EBE00 maps it to a slot: 0 = slot 1,
+  1 = slot 2, 2 = slot 16, 3 = slot 6. Any other index gives slot 0x16 (22), i.e. nothing in hand. Bytes +0x18..+0x21
+  are the gas mask, knife, medkit and similar flags. Its vtbl+0x300 (RVA 0x4F8120) gives the state byte from the top state.
+  So 0x16 on the host's body (network class, as the client sees it) means its weapon index is empty.
+- A pad Y switch pushes a new state onto the stack. Example: [none, w1, w0] after ubludok, then revolver.
+- The cloned body's inventory (copy RVA 0x4F8460) starts with three empty states (weapon 0xFFFF). Its cloned weapon
+  is drawn anyway, and the game pushes the drawn weapon's state a moment later.
+- Tried and removed: on the client, "holster ours while the host's hands are empty". It pushed an empty state with
+  RVA 0x4F8190 (builds a state from a state byte and pushes it, without visuals). It then called the old item's
+  vtbl+0x180 and the new item's vtbl+0x178, as RVA 0x4E3100 does. The state became 0x16, but the gun stayed in
+  view. With item vtbl+0xE8 (holster, as the network class's RVA 0x25DB20 does) instead, the game drew the weapon
+  again about 1.7 s later, every time. **The screen then showed two ubludoks**: one lit like a world object near the
+  view, one in the hands. That is the owner's two-weapons picture. Derived: two weapons = an item holstered by
+  vtbl+0xE8 (detached from the HUD but still drawn in the world) and then drawn again.
+- RVA 0x4EB890 is the game's own select path, inside the SP inventory's vtbl+0x230 handler (RVA 0x4EC070). It
+  draws the new state's item with vtbl+0xD0 (or +0xD8 when inv+0x8A9 == 2). With its 5th argument set, it calls the
+  current item's vtbl+0x240 first. Untested: vtbl+0x240 as a clean "hide".
+
+Owner report (session 12): in Riga the client can't move and can't see the host.
+- Verified: the client's body ignores pad walking in the bar. It moved 0.06 m in 2 s. Pokes to its fields
+  (l19 values at +0x18D0, +0xC64, +0xB98, +0x500..+0x5D0, +0x1040..+0x11F0) changed nothing. A hexdump diff with a
+  free l19 body found those as the only non-pointer differences.
+- Verified: `ride_follow` follows the bar seat (`engine: ride dummy_bar_act`) and pins our body there. Two other
+  rules still pinned it: re-take the offset while the parent is still, and "still" = under 0.5 m in 0.5 s (the seat
+  sways about 0.2 m). Adding only the parent's per-frame movement lost the handcar: the client fell 60 m behind
+  2 s into l03, and the body controller overrides small moves. All reverted. One walk with the 0.5 m rule
+  crashed the client at AV RVA 0x79CA22. That is session 8's ride crash address.
+- Derived: the joiner's body is a clone of the host's live player (`@spawn_player`). Joining during a scripted act
+  probably copies the act's movement lock. The host's script later unlocks only `player` (the host). Unknown: where
+  that lock lives. Lead: script actions `actions/player/movement`, `actions/actor movement`, `actions/force actor state`,
+  `actions/player/hands hide`, `actions/player/civil mode` (registered at RVA 0x42BF56 and later).
+- Can't see the host: the client sees no body on the host's seat from 1 m away. On the host's screen, the client's
+  body stands in front of the camera. Guess: the bar act hides `player` (`actions/player/hide subj`), and on the
+  client `player` is the host's copy.
+
+New diagnostics: `@invst <id|ctl>` (stack dump), `@poke <id|ctl> <off> <size> <val>` (write + log position),
+`@inv ctl`, `@hexdump ctl [len]`.
+
 ### 5.8 Fight test level: l03_chase handcar (session 8, 2026-11-13)
 
 How the saves were made (single instance, verified): `disconnect;server;map 2033\l03_chase` from the menu, then pad A
