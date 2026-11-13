@@ -675,7 +675,8 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         std::string names = "engine: spawn_player sources:";  // diagnostics (FINDINGS 5.11)
                         for (uint16_t i = 0; i < n; ++i) {
                             uint16_t sid = ((uint16_t*)list.data)[i * 3];
-                            snprintf(buf, sizeof(buf), " %X:%s", sid, entity_name(entity_by_id(sid)));
+                            uint8_t* se = entity_by_id(sid);
+                            snprintf(buf, sizeof(buf), " %X:%s", sid, se ? entity_name(se + 0xA0) : "-");
                             names += buf;
                         }
                         LOG_INFO(names);
@@ -774,6 +775,19 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                             out += b;
                         }
                     }
+                    LOG_INFO(out);
+                    continue;
+                }
+                if (c.rfind("@ids ", 0) == 0) {  // diagnostics: "@ids <from hex> <to hex>": existing entities in an id range
+                    unsigned lo = 0, hi = 0;
+                    sscanf(c.c_str() + 5, "%x %x", &lo, &hi);
+                    std::string out = "engine: ids";
+                    for (unsigned id = lo; id <= hi && id < 0xFFFF; ++id)
+                        if (uint8_t* x = entity_by_id(id)) {
+                            char b[96];
+                            snprintf(b, sizeof(b), " %X'%s'f%X", id, entity_name(x + 0xA0), *(uint32_t*)(x + 0x10C));
+                            out += b;
+                        }
                     LOG_INFO(out);
                     continue;
                 }

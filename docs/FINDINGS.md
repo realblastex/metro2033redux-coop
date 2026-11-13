@@ -551,8 +551,13 @@ Verified (two instances, `coop_ch3`, host runs `change_map 2033\l04_riga` while 
   pointer, unknown). Same crash with a fresh host process loading a save made after the transition.
 - A fresh host on `map 2033\l04_riga` (no carry-over): the client joins and controls its body.
 - The difference: after the transition the player's body has 37 entities, and the carried-over ones have ids
-  0x0..0x23. On a fresh level it has 33 entities with the level file's ids. Derived guess: those low ids collide
-  with ids the client's own level load uses.
+  0x0..0x23. On a fresh level it has 33 entities with the level file's ids. `@ids 0 40` (new) on a host that
+  loaded a save made after the transition: 0x0..0x23 are the carried-over inventory (ammo, weapons, medkit,
+  `player_torch`, `players_knife`, `players_hands`, three `@clone@` weapon parts). On a fresh `map 2033\l04_riga`
+  no entity has an id in 0x0..0x40, so it is not a clash with the client's level entities.
+- Not the client reading `2033_l04_riga.player` either: the client crashed the same way with that file absent
+  (the engine logs `content_open ... [read]` even for a missing file). Unknown: what in the qsave breaks for
+  these entities (MP-format saves differ, see 5.10).
 
 What the mod does:
 - Client in a session: the worker RVA 0x540C0 is skipped, the host counts as gone, the client restarts and joins
