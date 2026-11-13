@@ -90,7 +90,9 @@ public:
             pos_ = q + 1;
             // macros: "@host" (on a loaded single-player level) and "@join <ip>" expand in place
             std::string macro;
-            if (c == "@host") macro = "@title Metro Redux [host];@place left;@net_host;@wait 1;@players 1;@link_actor";
+            // "gamesave coop_session" first: saves written while hosting can't be loaded (FINDINGS 5.9), so this
+            // single-player save is what a host death reloads
+            if (c == "@host") macro = "@title Metro Redux [host];@place left;gamesave coop_session;@wait 1;@net_host;@wait 1;@players 1;@link_actor";
             else if (c.rfind("@join ", 0) == 0)
                 macro = "@title Metro Redux [client];connect " + trim(c.substr(6)) +
                         ";@wait_log mapstate_loaded_and_waiting 60;@mp 1;@wait 1;@finish_load;@wait 1;@unpause_all"
@@ -178,6 +180,12 @@ static DWORD WINAPI main_thread(LPVOID) {
     // shortcut: "host at the first level start after the menu" assumes injection before the menu loads (the launcher
     // injects ~3 s after launch, the menu comes ~14 s later); if injection is late, press F9 in the level
     bool auto_done = cfg.mode != "host" && cfg.mode != "join";
+    // A host restarted after a death (or a test) loads this save itself: past the title screen, then gameload; the
+    // auto host below fires once the loaded level runs.
+    char load[64] = {};
+    if (cfg.mode == "host" && GetEnvironmentVariableA("METRO_COOP_LOAD", load, sizeof(load)))
+        exec.push("@wait_log playing video 30;@wait 1;@pad 1000 0 0 200;@wait 2;@pad 0010 0 0 200;@wait 2;"
+                  "@pad 1000 0 0 200;@wait 2;gameload " + std::string(load) + ";@wait_log load save bin 30;@wait 1;@finish_load");
     if (!auto_done) LOG_INFO("mode: " + cfg.mode);
     uint64_t start_ms = GetTickCount64();
     g_running = true;
@@ -188,6 +196,7 @@ static DWORD WINAPI main_thread(LPVOID) {
         DWORD pid = 0;
         if (HWND fg = (HWND)engine_real_foreground_window()) GetWindowThreadProcessId(fg, &pid);
         front = pid == GetCurrentProcessId();
+        static uint64_t join_at = 0;  // when join mode connected (0 = not yet)
         bool k9 = front && (GetAsyncKeyState(VK_F9) & 0x8000), k11 = front && (GetAsyncKeyState(VK_F11) & 0x8000);
         if (k9 && !f9) { LOG_INFO("hotkey F9: host"); exec.push("@host"); }
         if (k11 && !f11) { LOG_INFO("hotkey F11: join " + cfg.join_address); exec.push("@join " + cfg.join_address); }
@@ -199,6 +208,52 @@ static DWORD WINAPI main_thread(LPVOID) {
             auto_done = true;
             LOG_INFO("auto " + cfg.mode);
             exec.insert_next(cfg.mode == "host" ? "@wait 2;@unpause_all;@host" : "@wait 2;@join " + cfg.join_address);
+            if (cfg.mode == "join") join_at = GetTickCount64();
+        }
+        // Restart this game through the launcher (args "--host" / "--join <ip> [--second]"); the new game inherits
+        // our environment (METRO_COOP_*). A fresh process is the only reliable way back into a network game: a
+        // second in-process reload crashed (RVA 0x3175A) and an in-process reconnect never loads the level (FINDINGS 5.9).
+        auto restart = [&](const std::string& args) {
+            std::string cmd = "\"" + dir + "MetroCoopLauncher.exe\" " + args;
+            STARTUPINFOA si = {sizeof(si)};
+            PROCESS_INFORMATION pi = {};
+            LOG_INFO("restarting: " + cmd);
+            if (CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, dir.c_str(), &si, &pi)) {
+                CloseHandle(pi.hThread);
+                CloseHandle(pi.hProcess);
+                TerminateProcess(GetCurrentProcess(), 0);
+            }
+            LOG_ERROR("launcher start failed: " + std::to_string(GetLastError()));
+        };
+        uint64_t now = GetTickCount64();
+        // Host died: restart and load "coop_session" (written by @host; checkpoint saves made while hosting can't be
+        // loaded). The client loses the host and restarts too (below).
+        // shortcut: progress goes back to where hosting started; a down/revive system may replace this later.
+        static uint64_t dead_since = 0;
+        if (engine_host_dead()) {
+            if (!dead_since) dead_since = now;
+            if (now - dead_since > 4000) {
+                LOG_INFO("host died: restarting from coop_session");
+                SetEnvironmentVariableA("METRO_COOP_LOAD", "coop_session");
+                restart("--host");
+                dead_since = 0;
+            }
+        } else dead_since = 0;
+        // Client lost the host, or join mode got no session within 90 s (the host wasn't up yet): restart in join mode.
+        static bool in_session = false;
+        static uint64_t lost_since = 0;
+        // restarts in a row without a session; inherited by the restarted game. Cap 3 (about 5 min) so a host that
+        // quit for good doesn't keep the client restarting.
+        static int retries = [] { char v[8] = {}; return GetEnvironmentVariableA("METRO_COOP_RETRY", v, 8) ? atoi(v) : 0; }();
+        if (engine_client_in_session()) in_session = true, lost_since = 0, retries = 0;
+        else if (retries < 3 && (in_session || (join_at && now - join_at > 90000))) {
+            if (!lost_since) lost_since = now;
+            if (now - lost_since > 5000) {
+                SetEnvironmentVariableA("METRO_COOP_RETRY", std::to_string(in_session ? 1 : retries + 1).c_str());
+                restart("--join " + cfg.join_address + (cfg.engine_bind_port ? " --second" : ""));
+                in_session = false;
+                join_at = 0;
+            }
         }
         exec.tick();
         engine_tick();

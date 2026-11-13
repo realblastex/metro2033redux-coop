@@ -109,6 +109,11 @@ static uint8_t* entity_by_id(unsigned id) {
     }
     return nullptr;
 }
+static uint8_t* controlled() {
+    uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA (as @goto)
+    return lvl ? *(uint8_t**)(lvl + 0x38) : nullptr;
+}
+static int local_slot() { return g_players ? *(int32_t*)((uint8_t*)g_players - 0x18 + 8) : -1; }
 
 static void __fastcall slog_hook(const char* s) {
     if (s && strstr(s, "loader_finish: mapstate_running")) ++g_level_starts;
@@ -582,6 +587,11 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         }
                     }
                     LOG_INFO(out);
+                    continue;
+                }
+                if (c.rfind("@health ", 0) == 0) {  // tests: "@health <v>" sets our own body's health float (+0x308)
+                    if (uint8_t* e = controlled()) *(float*)(e + 0x308) = (float)atof(c.c_str() + 8);
+                    LOG_INFO("engine: " + c.substr(1));
                     continue;
                 }
                 if (c.rfind("@detach ", 0) == 0) {  // diagnostics: "@detach <id hex>" = attach RVA 0x6DD360 to a null parent
@@ -1099,11 +1109,15 @@ using service_t = int(__fastcall*)(void*, uint8_t*, uint32_t);
 static service_t g_service_orig = nullptr;
 static std::atomic<int> g_events_logged{0};
 static std::atomic<uint64_t> g_service_calls{0};
+// Client: the host's ENet disconnect (event type 2). The client keeps players=2 and its body after that (its level
+// runs on alone), so this is the only sign that the host left. The process restarts afterwards, so never reset.
+static std::atomic<bool> g_host_gone{false};
 static int __fastcall service_hook(void* host, uint8_t* ev, uint32_t timeout) {
     ++g_service_calls;
     int r = g_service_orig(host, ev, timeout);
     if (r > 0 && ev) {
         uint32_t type = *(uint32_t*)ev;
+        if (type == 2 && local_slot() >= 1) g_host_gone = true;
         uint8_t* pkt = *(uint8_t**)(ev + 24);
         size_t len = (type == 3 && pkt) ? *(size_t*)(pkt + 24) : 0;
         uint8_t first = (len && *(uint8_t**)(pkt + 16)) ? **(uint8_t**)(pkt + 16) : 0;
@@ -1346,6 +1360,14 @@ std::string engine_stats() {
            (g_loader ? " paused=" + std::to_string(((uint8_t*)g_loader)[0x3244]) + "/" + std::to_string(((uint8_t*)g_loader)[0x3245]) +
                        " pstack=" + std::to_string(*(uint16_t*)((uint8_t*)g_loader + 0x16fe0 + 8)) + "/" + std::to_string(*(uint16_t*)((uint8_t*)g_loader + 0x16fe0 + 10)) : std::string()) +
            " local_idx=" + std::to_string(g_players ? *(int32_t*)((uint8_t*)g_players - 0x18 + 8) : -2) + slots_str();
+}
+
+bool engine_host_dead() {
+    uint8_t* e = controlled();
+    return g_mp_flag && *g_mp_flag && local_slot() == 0 && e && *(float*)(e + 0x308) <= 0;
+}
+bool engine_client_in_session() {
+    return !g_host_gone && g_mp_flag && *g_mp_flag && local_slot() >= 1 && g_players->size >= 2 && controlled();
 }
 
 bool engine_exec(const std::string& cmd) {

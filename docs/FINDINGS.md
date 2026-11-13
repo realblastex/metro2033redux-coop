@@ -439,6 +439,39 @@ Riding (verified, same day):
 Open (unknown): how single player carries `player` (the joiner still can't walk or turn with the handcar); what
 co-op should do when the host dies (now the host gets the single-player death screen, the client plays on).
 
+### 5.9 Host death: reload for both players (session 8, 2026-11-13)
+
+Owner's choice: on a death, reload the checkpoint (a down/revive system maybe later).
+
+Verified, all on `l03_chase`:
+- On the host, the single-player death screen's "Load last checkpoint" crashes (AV RVA 0x3175A).
+- A console `gameload` crashes the same way once the game has hosted, even with no client: in the level, from
+  the main menu ("Quit to main menu" works), after `@mp 0`, after `@players 1`.
+- After `disconnect` there is no level, and `gameload` crashes at RVA 0x53E2E. That is the `gameload` handler
+  (RVA 0x53DA0) reading `*(g_level+0x130)` with `g_level` = 0.
+- `disconnect;@mp 0;server;map <map>`, then `gameload <save>` works once. A second such in-process reload (after
+  another hosting with a client in) crashed at RVA 0x3175A. The saves themselves loaded fine in a fresh process.
+- Saves written while hosting (the game's checkpoint `auto_save`) can't be loaded at all: a fresh process crashed on
+  one with `@mp 0` (RVA 0x3175A) and `@mp 1` (RVA 0x3174B). RVA 0x31650 is the save stream's string reader, so
+  the stream is read out of step. Leaving player clones out of the save didn't help. That was a patch of the save loop
+  RVA 0x3CD210 at 0x3CD59C, sending flag-0x10000 entities to its `*save-skip*` path; it was removed again.
+- On the client, a second `connect` in the same process (after the host left and came back) connects but never
+  loads the host's level. That happened even after first loading a map. A fresh client process joins normally.
+- The client keeps `players=2` and its body after the host leaves (its own copy of the level runs on). The only
+  sign is the ENet disconnect event (type 2).
+
+What the mod does (verified with two death cycles through the launcher, about 65 s from death to both players
+back in the level, no crash):
+- `@host` first writes `gamesave coop_session` (single-player, loadable), then hosts.
+- Host: own health (entity+0x308) <= 0 for 4 s while hosting, then restart through `MetroCoopLauncher.exe --host`
+  with `METRO_COOP_LOAD=coop_session`. The new game skips the title screen, loads that save, and auto-hosts.
+- Client: host's ENet disconnect for 5 s, or join mode with no session 90 s after joining, then restart through
+  `--join <ip> [--second]`. At most 3 restarts in a row (`METRO_COOP_RETRY`), so a host that quit doesn't keep it
+  restarting.
+- Limits: a death goes back to where hosting started, not to the last checkpoint. Checkpoint saves the game writes
+  while hosting overwrite the player's real `auto_save` with one that can't be loaded (unknown yet: how to block or
+  fix them). `@health <v>` (tests) sets the own body's health.
+
 ## 6. Corrections to early analysis
 - The Steam `metro.exe` is SteamStub-protected (`.text` entropy 8.0). Early "97.8 % encrypted code" conclusions came
   from disassembling encrypted bytes. The unpacked exe analyses normally.
