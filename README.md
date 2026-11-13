@@ -29,15 +29,19 @@ What works:
 - Handcar ride on `l03_chase` (early story): the client's body rides along with the host's handcar
   (FINDINGS 5.8). `scripts\smoke_test.ps1 -Save coop_ch3` passes. The nosalis attack on the handcar kills the host
   with the single-player death screen; the client rides on (host death handling is not done).
-- Host death: both games restart and load the save made when hosting started (`coop_session`), then the host hosts
-  and the client joins again by themselves (about 65 s; FINDINGS 5.9). Progress since hosting started is lost.
+- Host death: both games restart and load the host's last checkpoint (`auto_save`, or `coop_session` = the save
+  made when hosting started if no checkpoint came since), then the host hosts and the client joins again by
+  themselves (about 65 s; FINDINGS 5.9, 5.10).
+- Checkpoint saves written while hosting load again (FINDINGS 5.10). The joiner's game writes no saves while it is in
+  a session, so its own saves stay untouched.
 - The windows are titled `Metro Redux [host]` and `Metro Redux [client]` after `@host` / `@join`.
   Three game crashes that assume one single player exist were guarded for this (FINDINGS 5.5).
 
 What does not work yet:
 
-- **Back up your saves before hosting.** Checkpoint saves the game writes while you host replace your `auto_save`
-  with one that can't be loaded (the game crashes on it). Unknown yet how to block or fix them.
+- **Back up your saves before hosting.** Checkpoints while you host still replace your `auto_save` with the co-op
+  run's progress (it loads in single player too). A client that joined while a scripted fight was running crashed
+  once on loading the host's level (FINDINGS 5.10).
 
 - Both bodies spawn on the same spot; `@join` then moves the client 1.2 m in front of the host. A wall there would
   block that. See [docs/FINDINGS.md](docs/FINDINGS.md), section 5.

@@ -498,6 +498,40 @@ back in the level, no crash):
   while hosting overwrite the player's real `auto_save` with one that can't be loaded (unknown yet: how to block or
   fix them). `@health <v>` (tests) sets the own body's health.
 
+### 5.10 Saves written while hosting (session 9, 2026-11-13)
+
+Save path (derived from disassembly): console `gamesave [name]` (handler RVA 0x53D70, no name = `auto_save`) and
+the checkpoint code (RVA 0x519C0) both call `(*g_savemgr)->vtbl[0x110](g_savemgr, name)`, `g_savemgr` at RVA
+0xFBD7A8; that is RVA 0x2085B0 -> RVA 0x672130. It only queues the save: name at +0x1D98, state +0x1D90 = 1, and
+a request is dropped while the state is busy (`!saving of checkpoint [%s] skipped due to acting saving...`). The
+next frame serializes the world through the save loop RVA 0x3CD210 (log `total : gamesave [N ms]`); the state
+goes back to 0 about 5 s later.
+
+Verified (fresh-process `gameload`, `coop_ch3`):
+- A save written while hosting, no client: crashes on load (AV RVA 0x3174B), as in 5.9.
+- The same with the MP flag (RVA 0xFBDF2A) cleared until the save is serialized: loads and plays.
+- With a joined client, flag cleared: the load crashed (AV executing RVA 0x108BE89, load stack RVA 0x331E7).
+- Flag cleared and the joiner's body entities (the ids `@spawn_player` created) left out of the save loop: loads;
+  hosting from that save and a client joining work (client got a new body).
+- The flag is off for about 15 ms per save; the session ran on (both alive, client controlled its body).
+
+What the mod does: hooks RVA 0x2085B0; on the host it clears the MP flag when a save is queued and sets it again at
+the `total : gamesave` log line (15 s fallback). A 5-byte jump at RVA 0x3CD59C (the loop's per-entity "save or
+skip" point, entity in rsi) goes to a stub that sends the joiner's body entities to the loop's next entity (RVA
+0x3CD9AD). A client in a session writes no saves at all (its world is a copy of the host's). A host death restarts
+from `auto_save` when this game wrote a checkpoint while hosting, else from `coop_session`.
+
+Verified end to end (launcher, both from `coop_ch3`): after the vision the game wrote a checkpoint while hosting
+(`save 'auto_save' mp=1`), the host died to the nosalis, restarted from `auto_save`, loaded it, hosted, and the
+client rejoined and got a body. Smoke tests PASS: Hunter (8), `-Save coop_l19 -Respawn` (10).
+
+Open:
+- That checkpoint is a few seconds before the scripted nosalis attack, so an idle host died again ~45 s after each
+  restart. On the 4th rejoin the client crashed right after loading the host's level (AV executing a garbage
+  address, load stack RVA 0x331E7) during the attack. Unknown whether that is new; the joins before it worked.
+- Unknown why the MP flag changes the save stream, and why the body breaks the load.
+- Checkpoints while hosting still write the player's real `auto_save` (now loadable, but with the co-op state).
+
 ## 6. Corrections to early analysis
 - The Steam `metro.exe` is SteamStub-protected (`.text` entropy 8.0). Early "97.8 % encrypted code" conclusions came
   from disassembling encrypted bytes. The unpacked exe analyses normally.

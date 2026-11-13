@@ -90,8 +90,7 @@ public:
             pos_ = q + 1;
             // macros: "@host" (on a loaded single-player level) and "@join <ip>" expand in place
             std::string macro;
-            // "gamesave coop_session" first: saves written while hosting can't be loaded (FINDINGS 5.9), so this
-            // single-player save is what a host death reloads
+            // "gamesave coop_session" first: what a host death reloads until the first checkpoint while hosting
             if (c == "@host") macro = "@title Metro Redux [host];@place left;gamesave coop_session;@wait 1;@net_host;@wait 1;@players 1;@link_actor";
             else if (c.rfind("@join ", 0) == 0)
                 macro = "@title Metro Redux [client];connect " + trim(c.substr(6)) +
@@ -226,15 +225,17 @@ static DWORD WINAPI main_thread(LPVOID) {
             LOG_ERROR("launcher start failed: " + std::to_string(GetLastError()));
         };
         uint64_t now = GetTickCount64();
-        // Host died: restart and load "coop_session" (written by @host; checkpoint saves made while hosting can't be
-        // loaded). The client loses the host and restarts too (below).
-        // shortcut: progress goes back to where hosting started; a down/revive system may replace this later.
+        // Host died: restart and load the last checkpoint this game wrote while hosting ("auto_save", written
+        // loadable since FINDINGS 5.10), else "coop_session" (written by @host). The client loses the host and
+        // restarts too (below).
+        // shortcut: a down/revive system may replace this later.
         static uint64_t dead_since = 0;
         if (engine_host_dead()) {
             if (!dead_since) dead_since = now;
             if (now - dead_since > 4000) {
-                LOG_INFO("host died: restarting from coop_session");
-                SetEnvironmentVariableA("METRO_COOP_LOAD", "coop_session");
+                const char* save = engine_checkpoint_saved() ? "auto_save" : "coop_session";
+                LOG_INFO(std::string("host died: restarting from ") + save);
+                SetEnvironmentVariableA("METRO_COOP_LOAD", save);
                 restart("--host");
                 dead_since = 0;
             }

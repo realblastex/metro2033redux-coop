@@ -15,6 +15,7 @@
 #include <vector>
 #include <atomic>
 #include <optional>
+#include <bitset>
 
 namespace metro_coop {
 
@@ -46,6 +47,97 @@ struct PlayersVec { void* array; uint16_t capacity; uint16_t size; };
 static PlayersVec* g_players = nullptr;
 using resize_t = bool(__fastcall*)(PlayersVec*, uint32_t);
 static resize_t g_resize = nullptr;  // RVA 0x4E8B0, constructs/destroys entries
+// Every game save (console "gamesave [name]" = RVA 0x53D70, checkpoints from RVA 0x519C0) is
+// (*g_savemgr)->vtbl[0x110](g_savemgr, name), g_savemgr at RVA 0xFBD7A8. A save written with the MP flag set
+// can't be loaded (crash RVA 0x3174B/0x3175A); one written with the flag cleared loads (FINDINGS 5.10). The call
+// only queues the save (RVA 0x672130: name at +0x1D98, state +0x1D90 = 1); the next frame serializes it and logs
+// "total : gamesave", so the flag stays cleared until that line (slog_hook) or 15 s (engine_tick).
+using save_t = uintptr_t(__fastcall*)(void*, const char*);
+static save_t g_save_orig = nullptr;
+static std::atomic<uint64_t> g_save_since{0};  // != 0 while a save runs with the MP flag cleared
+static std::atomic<bool> g_checkpoint_saved{false};  // a loadable auto_save was written while networked
+static void save_restore_flag(const char* why) {
+    uint64_t t = g_save_since.exchange(0);
+    if (!t) return;
+    *g_mp_flag = 1;
+    LOG_INFO(std::string("engine: save done (") + why + "), mp flag back after " + std::to_string(GetTickCount64() - t) + " ms");
+}
+// Ids of the joiner's body (root + children, from @spawn_player). The save loop (RVA 0x3CD210) leaves them out: a
+// hosted save that held the body crashed on load (AV at RVA 0x108BE89). Patch: at RVA 0x3CD59C (per-entity
+// "save or skip" decision, entity in rsi) a stub asks save_skip_body and jumps to the loop's next entity
+// (RVA 0x3CD9AD) for body entities, else runs the two replaced instructions and continues.
+static std::bitset<65536> g_body_ids;
+static bool __fastcall save_skip_body(uint8_t* ent) {
+    return g_body_ids.test(*(uint16_t*)(ent + 0x108));  // entity id (= handle +0x68, handle at entity+0xA0)
+}
+static void install_save_skip(uint8_t* exe) {
+    uint8_t* at = exe + 0x3CD59C;
+    if (memcmp(at, "\x45\x85\xE4\x0F\x84\x43\x01\x00\x00", 9) != 0) { LOG_ERROR("engine: save loop bytes differ"); return; }
+    uint8_t* stub = nullptr;  // within +-2 GB of the exe for a rel32 jmp
+    for (uintptr_t a = ((uintptr_t)exe - 0x100000) & ~0xFFFFull; !stub && a > (uintptr_t)exe - 0x70000000; a -= 0x10000)
+        stub = (uint8_t*)VirtualAlloc((void*)a, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!stub) { LOG_ERROR("engine: no stub memory near the exe"); return; }
+    uint8_t code[] = {
+        0x50, 0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53,  // push rax rcx rdx r8 r9 r10 r11
+        0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xE4, 0xF0, 0x48, 0x83, 0xEC, 0x20,  // push rbp; mov rbp,rsp; align; shadow
+        0x48, 0x89, 0xF1,                                      // mov rcx, rsi
+        0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,                    // mov rax, save_skip_body   (offset 28)
+        0xFF, 0xD0, 0x48, 0x89, 0xEC, 0x5D, 0x84, 0xC0,        // call rax; mov rsp,rbp; pop rbp; test al,al
+        0x41, 0x5B, 0x41, 0x5A, 0x41, 0x59, 0x41, 0x58, 0x5A, 0x59, 0x58,  // pops (flags kept)
+        0x74, 0x0E, 0xFF, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // jz +14; jmp [0x3CD9AD]   (offset 63)
+        0x45, 0x85, 0xE4, 0x75, 0x0E, 0xFF, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // test r12d; jnz +14; jmp [0x3CD6E8] (offset 82)
+        0xFF, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,        // jmp [0x3CD5A5]   (offset 96)
+    };
+    auto put = [&](size_t off, const void* v) { memcpy(code + off, &v, 8); };
+    put(28, (const void*)&save_skip_body);
+    put(63, exe + 0x3CD9AD);
+    put(82, exe + 0x3CD6E8);
+    put(96, exe + 0x3CD5A5);
+    memcpy(stub, code, sizeof(code));
+    DWORD old;
+    VirtualProtect(at, 9, PAGE_EXECUTE_READWRITE, &old);
+    uint8_t jmp[9] = {0xE9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90};
+    int32_t rel = (int32_t)(stub - (at + 5));
+    memcpy(jmp + 1, &rel, 4);
+    memcpy(at, jmp, 9);
+    VirtualProtect(at, 9, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), at, 9);
+    LOG_INFO("engine: save loop skips the joiner's body");
+}
+static uintptr_t __fastcall save_hook(void* mgr, const char* name) {
+    uint8_t mp = g_mp_flag ? *g_mp_flag : 0;
+    // A joiner's game is a copy of the host's world: its saves would replace the player's own progress with an
+    // unloadable or meaningless save, so a client in a session writes none.
+    if (mp && *(int32_t*)((uint8_t*)GetModuleHandleA(nullptr) + 0xFD5028) > 0) {  // net_core local index
+        LOG_INFO(std::string("engine: save '") + (name ? name : "?") + "' skipped (client)");
+        return 0;
+    }
+    // RVA 0x672130 drops a request while +0x1D90 is busy, so only a request that gets queued clears the flag
+    int busy = *(int*)((uint8_t*)mgr + 0x1D90);
+    LOG_INFO(std::string("engine: save '") + (name ? name : "?") + "' mp=" + std::to_string(mp) + " state=" + std::to_string(busy));
+    uintptr_t r = g_save_orig(mgr, name);
+    if (mp && !g_save_since && *(int*)((uint8_t*)mgr + 0x1D90) == 1 && busy != 1) {
+        *g_mp_flag = 0;
+        g_save_since = GetTickCount64();
+        if (name && !strcmp(name, "auto_save")) g_checkpoint_saved = true;
+    }
+    return r;
+}
+static void install_save_hook() {
+    static bool done = false;
+    uint8_t* exe = (uint8_t*)GetModuleHandleA(nullptr);
+    // shortcut: fixed RVA for this exe build (checked against the gamesave handler's bytes)
+    if (done || memcmp(exe + 0x53D81, "\x48\x8B\x0D", 3) != 0) return;
+    void** mgr = *(void***)(exe + 0xFBD7A8);
+    if (!mgr) return;
+    void* fn = ((void**)*mgr)[0x110 / 8];
+    done = true;  // one attempt
+    install_save_skip(exe);
+    bool ok = MH_CreateHook(fn, (LPVOID)&save_hook, (LPVOID*)&g_save_orig) == MH_OK && MH_EnableHook(fn) == MH_OK;
+    char b[96];
+    snprintf(b, sizeof(b), "engine: save hook at RVA 0x%llX %s", (unsigned long long)((uint8_t*)fn - exe), ok ? "ok" : "FAILED");
+    LOG_INFO(b);
+}
 // After a map loads the engine waits in "mapstate_loaded_and_waiting" (game paused, so net isn't serviced) until a
 // key press calls loader_finish(&g_loader) (RVA 0x69E4C0, g_loader RVA 0xFBDEA0; input callback at RVA 0x69E310).
 // "@finish_load" makes that call directly.
@@ -117,6 +209,7 @@ static int local_slot() { return g_players ? *(int32_t*)((uint8_t*)g_players - 0
 
 static void __fastcall slog_hook(const char* s) {
     if (s && strstr(s, "loader_finish: mapstate_running")) ++g_level_starts;
+    if (s && g_save_since && strstr(s, "total : gamesave")) save_restore_flag("serialized");
     if (s && !g_wait_hit) {
         std::lock_guard<std::mutex> lock(g_wait_mutex);
         if (!g_wait_text.empty() && strstr(s, g_wait_text.c_str())) g_wait_hit = true;
@@ -520,6 +613,11 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         ((triples_t)(exe + 0x6A9A80))(server, &src, &list, 0xFFFF);
                         uint16_t n = list.size;
                         uint16_t root = n ? ((uint16_t*)list.data)[(n - 1) * 3 + 1] : 0xFFFF;
+                        // shortcut: one joiner; a new body replaces the old body's ids (a dead body left behind gets saved)
+                        if (is_player) {
+                            g_body_ids.reset();
+                            for (uint16_t i = 0; i < n; ++i) g_body_ids.set(((uint16_t*)list.data)[i * 3 + 1]);
+                        }
                         snprintf(buf, sizeof(buf), "engine: spawn_player %u entities, root new id 0x%X", n, root);
                         LOG_INFO(buf);
                         // arg7 (event word5 bit 0): script spawners (e.g. RVA 0x4F7050) pass 1, the player spawn 0
@@ -880,6 +978,8 @@ static spp_t g_spp_orig = nullptr;
 static std::atomic<uint32_t> g_auto_spawn_s{0};
 void engine_set_auto_spawn(uint32_t delay_s) { g_auto_spawn_s = delay_s; }
 void engine_tick() {
+    install_save_hook();  // once the save manager exists (both host and client write checkpoints)
+    if (g_save_since && GetTickCount64() - g_save_since > 15000) save_restore_flag("timeout");
     // shortcut: one pending spawn at a time; a second peer joining within the delay replaces the first one's
     int slot = g_spawn_slot;
     static int fix_slot = -1;
@@ -1398,8 +1498,9 @@ bool engine_host_dead() {
     return g_mp_flag && *g_mp_flag && local_slot() == 0 && e && *(float*)(e + 0x308) <= 0;
 }
 bool engine_client_in_session() {
-    return !g_host_gone && g_mp_flag && *g_mp_flag && local_slot() >= 1 && g_players->size >= 2 && controlled();
+    return !g_host_gone && g_mp_flag && (*g_mp_flag || g_save_since) && local_slot() >= 1 && g_players->size >= 2 && controlled();
 }
+bool engine_checkpoint_saved() { return g_checkpoint_saved; }
 
 bool engine_exec(const std::string& cmd) {
     if (!g_get_console || !g_peek_orig) return false;
