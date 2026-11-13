@@ -26,6 +26,9 @@ What works:
 - A second, armed level works: on `l19_defence` both players get their own body and rifle, the client can fire, and
   the host sees the client's muzzle flash and tracers. Shooting the other player damages them: the host killed the
   client's body, and both sides agree it is dead.
+- Handcar ride on `l03_chase` (early story): the client's body rides along with the host's handcar
+  (FINDINGS 5.8). `scripts\smoke_test.ps1 -Save coop_ch3` passes. The nosalis attack on the handcar kills the host
+  with the single-player death screen; the client rides on (host death handling is not done).
 - The windows are titled `Metro Redux [host]` and `Metro Redux [client]` after `@host` / `@join`.
   Three game crashes that assume one single player exist were guarded for this (FINDINGS 5.5).
 
@@ -33,8 +36,8 @@ What does not work yet:
 
 - Both bodies spawn on the same spot; `@join` then moves the client 1.2 m in front of the host. A wall there would
   block that. See [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
-- The client sees two weapons after a weapon switch: hands hold the new gun and the old one stays in view
-  (FINDINGS 5.7, not fixed yet).
+- The two-weapons view after a weapon switch (FINDINGS 5.7) did not come back in a retest on 2026-11-13, and the
+  owner no longer sees it. The cause was never found.
 - The host draws the client's body wrong: up close it shows a big bare arm with a blade, while the client holds its
   AK. The client's weapon choice never reaches the host.
 - NPCs near the players replicate from the host (distance priority, ~128 bytes per packet); far NPCs did not update

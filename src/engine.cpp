@@ -252,6 +252,45 @@ void engine_keep_active() {
         LOG_ERROR("engine: GetForegroundWindow hook failed");
 }
 
+// Client: ride along when the host's body rides something (l03_chase handcar). In single player the level script
+// attaches 'player' to the handcar (parent handle +0x118, target = parent entity + 0xA0, so its +0x68 is the parent's
+// id +0x108; RVA 0x6DD360). Both sides see the host's body with that parent. The joiner's body gets no parent, and
+// attaching it did not move it (its controller keeps its own position), so we move it ourselves. Not while the
+// client's own script has attached its body (after l03's vision it does, onto the host's spot): forcing both crashed
+// the client (AV RVA 0x79CA22, 2026-11-13). shortcut: translation only (no turning with the parent, no walking on it);
+// upgrade: find how the single-player player is carried (drezina code, "vs_start_drezina").
+static uint8_t* parent_of(uint8_t* e) {
+    void** ph = *(void***)(e + 0x118);
+    return ph && *ph ? (uint8_t*)*ph - 0xA0 : nullptr;
+}
+static void ride_follow() {
+    static uint8_t* ride = nullptr;  // parent we follow
+    static float off[3] = {};
+    static uint64_t next_check = 0;
+    uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA (as @goto)
+    uint8_t* me = lvl ? *(uint8_t**)(lvl + 0x38) : nullptr;
+    if (!me) { ride = nullptr; return; }
+    if (GetTickCount64() >= next_check) {
+        next_check = GetTickCount64() + 250;
+        uint8_t* host = nullptr;
+        if (g_players && g_players->size >= 2 && *(int32_t*)((uint8_t*)g_players - 0x18 + 8) >= 1)
+            host = entity_by_id(*(uint16_t*)((uint8_t*)g_players->array + 0x64));
+        uint8_t* hp = host && host != me ? parent_of(host) : nullptr;
+        if (!hp || parent_of(me)) hp = nullptr;
+        if (hp != ride) {
+            ride = hp;
+            if (ride) for (int i = 0; i < 3; ++i) off[i] = *(float*)(me + 0xF0 + 4 * i) - *(float*)(ride + 0xF0 + 4 * i);
+            LOG_INFO(std::string("engine: ride ") + (ride ? entity_name(ride + 0xA0) : "off"));
+        }
+    }
+    if (!ride) return;
+    alignas(16) float m[16];
+    memcpy(m, me + 0xC0, sizeof(m));
+    for (int i = 0; i < 3; ++i) m[12 + i] = *(float*)(ride + 0xF0 + 4 * i) + off[i];
+    using set_xform_t = void(__fastcall*)(void*, float*, int);
+    (*(set_xform_t**)me)[0x190 / 8](me, m, 0);
+}
+
 static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
     static DWORD main_tid = 0;
     if (g_keep_active && !g_wndproc_orig) {
@@ -264,6 +303,10 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
             CallWindowProcA(g_wndproc_orig, g_game_hwnd, WM_SETFOCUS, 0, 0);
             LOG_INFO("engine: keep_active window hook installed");
         }
+    }
+    if (g_players && g_players->size >= 2) {
+        if (!main_tid) main_tid = game_window_thread();
+        if (GetCurrentThreadId() == main_tid) ride_follow();
     }
     if (g_cmd_pending) {
         if (!main_tid) main_tid = game_window_thread();

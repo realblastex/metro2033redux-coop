@@ -421,8 +421,23 @@ Two players (verified, same day):
   host died to the nosalis and got the single-player death menu ("load last checkpoint"). The client stayed alive,
   but its body does not ride the handcar: it stays where it spawned, and the handcar leaves it behind in the dark.
 
-Open (unknown): how the single-player player is attached to the handcar (needed for the joiner); what co-op should
-do when the host dies (now: single-player game over for the host only).
+Riding (verified, same day):
+- In single player the level script makes the handcar `drezina_hand_true_0001` (0x2C8) the parent of `player`
+  (`@dump player`: `p=2C8`). The parent handle at entity+0x118 points to the parent entity + 0xA0. Both sides see
+  the host's body with that parent. During the vision both bodies stand at (-445, 33, 8) with no parent.
+- After the vision the client's own level script attaches the client's body to 0x2C8, on the host's exact spot,
+  and carries it.
+- Attaching the joiner's body to 0x2C8 with the engine attach (RVA 0x6DD360) set `p=2C8` but did not move the body.
+- Fix (`ride_follow` in `src/engine.cpp`): on the client, while the host's body has a parent and the client's body
+  has none, the client's body keeps its offset to that parent every frame (set-transform vtbl+0x190, translation
+  only). An earlier manual version that kept moving the body after the client's script had attached it crashed the
+  client (AV RVA 0x79CA22).
+- Result: the client rode the whole handcar section next to the host, with no crash.
+  `smoke_test.ps1` PASS on Hunter (8), `-Save coop_l19 -Respawn` (10) and `-Save coop_ch3` (8).
+- `g_god on` (console) does not stop the scripted nosalis kill of the host.
+
+Open (unknown): how single player carries `player` (the joiner still can't walk or turn with the handcar); what
+co-op should do when the host dies (now the host gets the single-player death screen, the client plays on).
 
 ## 6. Corrections to early analysis
 - The Steam `metro.exe` is SteamStub-protected (`.text` entropy 8.0). Early "97.8 % encrypted code" conclusions came
