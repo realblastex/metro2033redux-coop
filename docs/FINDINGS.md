@@ -529,6 +529,9 @@ Open:
 - That checkpoint is a few seconds before the scripted nosalis attack, so an idle host died again ~45 s after each
   restart. On the 4th rejoin the client crashed right after loading the host's level (AV executing a garbage
   address, load stack RVA 0x331E7) during the attack. Unknown whether that is new; the joins before it worked.
+  Session 10: this matches the carry-over join crash in 5.11, but it is not the low-id entities: `@ids 0 ff` on a
+  host playing `coop_cx1` found no entity below 0x100 at 4 s, 24 s and 34 s (attack and host death). RVA 0x331E7 is a
+  generic stream array reader (`count`), likely a stale return address from the stack scan.
 - Unknown why the MP flag changes the save stream, and why the body breaks the load.
 - Fixed (session 10): a checkpoint while hosting (save name `auto_save`, MP flag set) is renamed to `coop_auto_save`
   in the save hook, and a host death restarts from that. Verified (`coop_ch3`, launcher): `save 'coop_auto_save'
