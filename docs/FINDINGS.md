@@ -586,6 +586,9 @@ Open:
   the body's items with low ids on purpose (carry-over id space); they keep them in every later save.
   Records with no parent (parent id 0xFFFF) are also passed to RVA 0x747F60 (the engine net list).
 - Only `change_map` from the console was tested, not a level's own end trigger (`triggers/game/next level`).
+  Derived (session 10): the `change_map %s` callers checked (RVA 0x51D60, and RVA 0x20849A in the save manager's
+  code) format the command into the console (console vtbl+0x40), so they reach the same handler and worker
+  RVA 0x540C0 as a typed `change_map`. 15 references to that string in all (xref.py); not every one was read.
 - The client's level change costs a game restart (~40 s). In a long-running host process the player slots keep
   growing when a client rejoins before the old peer timed out (seen: `players=5` with a looping client).
 - Test note: a client ini with `@join` in `exec_on_start` plus `mode=join` (written by the launcher on a
