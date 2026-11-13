@@ -396,6 +396,12 @@ Unknown: what hides holstered weapons of the local player in single-player, and 
 late. Next: find the local weapon-switch path (watch writes to the AK entity while switching, `@watch`), or create the
 joiner's body from the level's original player record instead of cloning the live player.
 
+Retest (session 8, 2026-11-13, build `5fd4b6f`): not reproduced. Two runs on `l19_defence`, client pad Y
+(`@pad 8000 0 0 200`) once in run 1 and three times, 20 s apart, in run 2. Every switch showed within about 10 s
+(AK, revolver, AK, revolver), and no extra AK stayed in view in screenshots up to 70 s after each switch. A run
+with the host skipping the network inventory apply (RVA 0x25DB20) looked the same, so it tells nothing. Unknown: the
+exact steps of the original repro (it may have used other diagnostic commands, or a different body position).
+
 New diagnostics: `@inv <id>`, `@links <id>`, `@refs <id> [len] [via]`, `@select <id> <state>`, `@detach <id>`,
 `@setflag <id> <clear> <set>`, `@hexdump <id> [len]`.
 
