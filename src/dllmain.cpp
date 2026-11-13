@@ -240,6 +240,18 @@ static DWORD WINAPI main_thread(LPVOID) {
                 dead_since = 0;
             }
         } else dead_since = 0;
+        // Host: a story level change ("change_map") keeps the network session but loads a new level, so host again
+        // there (new restart save, slot 0 linked to the new level's player). The client rejoins by restarting.
+        static int hosted_level = 0;  // level starts counted when this game last hosted
+        if (engine_hosting()) {
+            int ls = engine_level_starts();
+            if (!hosted_level) hosted_level = ls;
+            else if (ls > hosted_level) {
+                hosted_level = ls;
+                LOG_INFO("new level while hosting: hosting again");
+                exec.push("@wait 2;@unpause_all;@host");
+            }
+        }
         // Client lost the host, or join mode got no session within 90 s (the host wasn't up yet): restart in join mode.
         static bool in_session = false;
         static uint64_t lost_since = 0;

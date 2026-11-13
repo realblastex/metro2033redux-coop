@@ -42,6 +42,7 @@ static std::atomic<bool> g_spawn_force{false};  // respawn: spawn even though th
 // client; without one it becomes the network server only if this flag is already 1, else a local-only game.
 // So hosting = "@mp 1" then "server" (no arg).
 static uint8_t* g_mp_flag = nullptr;
+static std::atomic<bool> g_host_gone{false};  // client: the host left (ENet disconnect) or changed the level
 // net_core global (RVA 0xFD5020): +0 ENetHost* host (1 = local-only marker), +8 local player index, +0x18 players.
 struct PlayersVec { void* array; uint16_t capacity; uint16_t size; };
 static PlayersVec* g_players = nullptr;
@@ -68,7 +69,8 @@ static void save_restore_flag(const char* why) {
 // (RVA 0x3CD9AD) for body entities, else runs the two replaced instructions and continues.
 static std::bitset<65536> g_body_ids;
 static bool __fastcall save_skip_body(uint8_t* ent) {
-    return g_body_ids.test(*(uint16_t*)(ent + 0x108));  // entity id (= handle +0x68, handle at entity+0xA0)
+    // only game saves: the same loop writes the qsave a joining client loads, which must hold the body
+    return g_save_since && g_body_ids.test(*(uint16_t*)(ent + 0x108));  // entity id (handle at entity+0xA0, +0x68)
 }
 static void install_save_skip(uint8_t* exe) {
     uint8_t* at = exe + 0x3CD59C;
@@ -104,6 +106,45 @@ static void install_save_skip(uint8_t* exe) {
     FlushInstructionCache(GetCurrentProcess(), at, 9);
     LOG_INFO("engine: save loop skips the joiner's body");
 }
+// Level change worker RVA 0x540C0 ("disconnect 1; [server 1;] map <level>"): story transitions run console
+// "change_map <level>"; a host keeps its ENet session through it, and its net code then sends clients
+// "change_map_cl <level>". A client that follows loads the level itself and crashed applying the level's
+// .player data (AV RVA 0x3CA468, FINDINGS 5.11). So a client in a session skips it and counts the host as gone:
+// dllmain restarts it and it joins the host's new level like after a host death.
+static int local_slot();
+using change_map_t = void(__fastcall*)(const char*);
+static change_map_t g_change_map_orig = nullptr;
+static void __fastcall change_map_hook(const char* level) {
+    // a second call follows after the net state was reset (verified), so once rejoining, block every one
+    static bool rejoining = false;
+    if (rejoining || (g_mp_flag && *g_mp_flag && local_slot() >= 1)) {
+        LOG_INFO(std::string("engine: host changes level to ") + (level ? level : "?") + ", rejoining");
+        rejoining = g_host_gone = true;
+        return;
+    }
+    LOG_INFO(std::string("engine: change level to ") + (level ? level : "?"));
+    g_change_map_orig(level);
+}
+// RVA 0x3CA400 (virtual, no direct callers) replaces the controlled player *(g_level+0x38) with the one in a level's
+// "<level>.player" carry-over data (chunk_player_data). A client loading the host's level after a story level
+// change has no controlled entity yet and crashed on the null (AV RVA 0x3CA468); its body comes from the host.
+using player_data_t = uintptr_t(__fastcall*)(void*, void*, int);
+static player_data_t g_player_data_orig = nullptr;
+static uintptr_t __fastcall player_data_hook(void* a, void* data, int flag) {
+    uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA (g_level)
+    if (lvl && !*(void**)(lvl + 0x38)) {
+        LOG_INFO("engine: level player data skipped (no controlled entity)");
+        return 1;
+    }
+    // Host on a story level change: the carried-over items get ids 0x0..0x23, and a client joining that world
+    // crashed in the qsave load (FINDINGS 5.11); the level's own player loadout (as in a fresh "map") works.
+    // shortcut: the host loses the inventory carried over from the last level; re-id the items to keep it.
+    if (engine_hosting()) {
+        LOG_INFO("engine: level player data skipped (hosting: carry-over items break joining)");
+        return 1;
+    }
+    return g_player_data_orig(a, data, flag);
+}
 static uintptr_t __fastcall save_hook(void* mgr, const char* name) {
     uint8_t mp = g_mp_flag ? *g_mp_flag : 0;
     // A joiner's game is a copy of the host's world: its saves would replace the player's own progress with an
@@ -115,6 +156,7 @@ static uintptr_t __fastcall save_hook(void* mgr, const char* name) {
     // RVA 0x672130 drops a request while +0x1D90 is busy, so only a request that gets queued clears the flag
     int busy = *(int*)((uint8_t*)mgr + 0x1D90);
     LOG_INFO(std::string("engine: save '") + (name ? name : "?") + "' mp=" + std::to_string(mp) + " state=" + std::to_string(busy));
+    if (name && !strcmp(name, "coop_session")) g_checkpoint_saved = false;  // @host: new restart point
     uintptr_t r = g_save_orig(mgr, name);
     if (mp && !g_save_since && *(int*)((uint8_t*)mgr + 0x1D90) == 1 && busy != 1) {
         *g_mp_flag = 0;
@@ -133,6 +175,16 @@ static void install_save_hook() {
     void* fn = ((void**)*mgr)[0x110 / 8];
     done = true;  // one attempt
     install_save_skip(exe);
+    if (memcmp(exe + 0x540C0, "\x40\x53\x48\x83\xEC\x20\x48\x8B\xD9", 9) == 0 &&
+        MH_CreateHook(exe + 0x540C0, (LPVOID)&change_map_hook, (LPVOID*)&g_change_map_orig) == MH_OK &&
+        MH_EnableHook(exe + 0x540C0) == MH_OK)
+        LOG_INFO("engine: level change hook installed");
+    else LOG_ERROR("engine: level change hook failed");
+    if (memcmp(exe + 0x3CA400, "\x48\x8B\xC4\x55\x41\x55\x41\x56\x41\x57", 10) == 0 &&
+        MH_CreateHook(exe + 0x3CA400, (LPVOID)&player_data_hook, (LPVOID*)&g_player_data_orig) == MH_OK &&
+        MH_EnableHook(exe + 0x3CA400) == MH_OK)
+        LOG_INFO("engine: level player data guard installed");
+    else LOG_ERROR("engine: level player data guard failed");
     bool ok = MH_CreateHook(fn, (LPVOID)&save_hook, (LPVOID*)&g_save_orig) == MH_OK && MH_EnableHook(fn) == MH_OK;
     char b[96];
     snprintf(b, sizeof(b), "engine: save hook at RVA 0x%llX %s", (unsigned long long)((uint8_t*)fn - exe), ok ? "ok" : "FAILED");
@@ -208,7 +260,7 @@ static uint8_t* controlled() {
 static int local_slot() { return g_players ? *(int32_t*)((uint8_t*)g_players - 0x18 + 8) : -1; }
 
 static void __fastcall slog_hook(const char* s) {
-    if (s && strstr(s, "loader_finish: mapstate_running")) ++g_level_starts;
+    if (s && strstr(s, "loader_finish: mapstate_running")) ++g_level_starts, g_body_ids.reset();  // new level: old body gone
     if (s && g_save_since && strstr(s, "total : gamesave")) save_restore_flag("serialized");
     if (s && !g_wait_hit) {
         std::lock_guard<std::mutex> lock(g_wait_mutex);
@@ -620,6 +672,13 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         }
                         snprintf(buf, sizeof(buf), "engine: spawn_player %u entities, root new id 0x%X", n, root);
                         LOG_INFO(buf);
+                        std::string names = "engine: spawn_player sources:";  // diagnostics (FINDINGS 5.11)
+                        for (uint16_t i = 0; i < n; ++i) {
+                            uint16_t sid = ((uint16_t*)list.data)[i * 3];
+                            snprintf(buf, sizeof(buf), " %X:%s", sid, entity_name(entity_by_id(sid)));
+                            names += buf;
+                        }
+                        LOG_INFO(names);
                         // arg7 (event word5 bit 0): script spawners (e.g. RVA 0x4F7050) pass 1, the player spawn 0
                         if (n) ((spawn_ev_t)(exe + 0x6BA940))(nullptr, 0, &list, &src, &none, &none, !is_player, is_player, slot,
                                                              0, 0, nullptr, nullptr);
@@ -1242,7 +1301,6 @@ static std::atomic<int> g_events_logged{0};
 static std::atomic<uint64_t> g_service_calls{0};
 // Client: the host's ENet disconnect (event type 2). The client keeps players=2 and its body after that (its level
 // runs on alone), so this is the only sign that the host left. The process restarts afterwards, so never reset.
-static std::atomic<bool> g_host_gone{false};
 static int __fastcall service_hook(void* host, uint8_t* ev, uint32_t timeout) {
     ++g_service_calls;
     int r = g_service_orig(host, ev, timeout);
@@ -1392,6 +1450,12 @@ static LONG CALLBACK av_veh(EXCEPTION_POINTERS* e) {
         if (v > base && v < base + size) { len += snprintf(b + len, sizeof(b) - len, " %llX", (unsigned long long)(v - base)); ++found; }
     }
     LOG_INFO(b);
+    auto* c = e->ContextRecord;  // raw words around rsp: [rsp-8] == rip means a ret to a smashed return address
+    snprintf(b, sizeof(b), "engine: AV regs rsp-8=%llX rsp=%llX %llX %llX %llX rcx=%llX rdx=%llX rbx=%llX rdi=%llX rsi=%llX",
+             (unsigned long long)sp[-1], (unsigned long long)sp[0], (unsigned long long)sp[1], (unsigned long long)sp[2],
+             (unsigned long long)sp[3], (unsigned long long)c->Rcx, (unsigned long long)c->Rdx, (unsigned long long)c->Rbx,
+             (unsigned long long)c->Rdi, (unsigned long long)c->Rsi);
+    LOG_INFO(b);
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -1501,6 +1565,9 @@ bool engine_client_in_session() {
     return !g_host_gone && g_mp_flag && (*g_mp_flag || g_save_since) && local_slot() >= 1 && g_players->size >= 2 && controlled();
 }
 bool engine_checkpoint_saved() { return g_checkpoint_saved; }
+bool engine_hosting() {  // net_core.host is a real ENet host (1 = local-only marker) and we are slot 0
+    return g_players && *(uintptr_t*)((uint8_t*)g_players - 0x18) > 1 && local_slot() == 0;
+}
 
 bool engine_exec(const std::string& cmd) {
     if (!g_get_console || !g_peek_orig) return false;

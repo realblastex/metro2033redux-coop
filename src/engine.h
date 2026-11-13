@@ -37,6 +37,8 @@ bool engine_host_dead();
 bool engine_client_in_session();
 // A checkpoint (auto_save) was written while networked; such saves are written loadable (MP flag cleared).
 bool engine_checkpoint_saved();
+// This game runs the network server (it hosted; the ENet host survives story level changes).
+bool engine_hosting();
 
 // Changes the engine's local ENet bind port (default 1000). Needed for a second instance on the same PC.
 bool engine_set_bind_port(uint16_t port);

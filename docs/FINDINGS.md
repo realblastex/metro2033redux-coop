@@ -532,6 +532,50 @@ Open:
 - Unknown why the MP flag changes the save stream, and why the body breaks the load.
 - Checkpoints while hosting still write the player's real `auto_save` (now loadable, but with the co-op state).
 
+### 5.11 Story level changes (session 9, 2026-11-13)
+
+Derived from disassembly: level loads only come from the `map` (RVA 0x53600) and `gameload` (RVA 0x53DA0)
+console handlers (callers of the loader RVA 0x69CEC0). Story transitions run the console command
+`change_map <level>` (13 call sites); handler RVA 0x54130, worker RVA 0x540C0 = console
+`disconnect 1`, `server 1` (only when not slot 0), `map <level>`. The net code sends clients `change_map_cl <level>`
+(handler RVA 0x54230, same worker). The level's `next_level` property is stored at level +0xE0.
+RVA 0x3CA400 (virtual) replaces the controlled player with the carry-over in `<level>.player`
+(`chunk_player_data`).
+
+Verified (two instances, `coop_ch3`, host runs `change_map 2033\l04_riga` while hosting):
+- The host loads l04_riga and keeps its ENet session (net_core.host stays a real host); running `@host` again works.
+- A client that follows `change_map_cl` loads the level itself and crashed in RVA 0x3CA400 (no controlled
+  entity, AV RVA 0x3CA468). The worker runs twice on the client (the second time after the net state was reset).
+- A fresh client joining the host's l04 crashed in the qsave load (AV executing a garbage address equal to rcx;
+  `[rsp]` a heap pointer; stack scan RVA 0x331E7, 0x658E1D, 0x6583B2: looks like a job calling a dead function
+  pointer, unknown). Same crash with a fresh host process loading a save made after the transition.
+- A fresh host on `map 2033\l04_riga` (no carry-over): the client joins and controls its body.
+- The difference: after the transition the player's body has 37 entities, and the carried-over ones have ids
+  0x0..0x23. On a fresh level it has 33 entities with the level file's ids. Derived guess: those low ids collide
+  with ids the client's own level load uses.
+
+What the mod does:
+- Client in a session: the worker RVA 0x540C0 is skipped, the host counts as gone, the client restarts and joins
+  the host's new level (fresh process, as after a host death).
+- Host: once it has hosted, every new level start runs `@host` again (new `coop_session`, slot 0 linked to the new
+  level's player, stale slots trimmed).
+- While hosting, RVA 0x3CA400 is skipped: the host gets the new level's own loadout instead of the carried-over
+  inventory. Also skipped when there is no controlled entity.
+- `@spawn_player` logs the source ids and names of the body's entities (diagnostics).
+
+Verified end to end: host `change_map` l03_chase -> l04_riga while hosting, the host re-hosted, the client
+restarted, joined the host's l04 and controlled its body (`ctl=26D`, screenshot in the Riga bar); no crash in
+3.5 min. Smoke tests PASS: Hunter (8), `-Save coop_l19 -Respawn` (10), `-Launcher` (8).
+
+Open:
+- The carried-over inventory is lost for the host on every level change (to fix: re-id the items, or find why
+  the ids break the client).
+- Only `change_map` from the console was tested, not a level's own end trigger (`triggers/game/next level`).
+- The client's level change costs a game restart (~40 s). In a long-running host process the player slots keep
+  growing when a client rejoins before the old peer timed out (seen: `players=5` with a looping client).
+- Test note: a client ini with `@join` in `exec_on_start` plus `mode=join` (written by the launcher on a
+  restart) connects twice and loops.
+
 ## 6. Corrections to early analysis
 - The Steam `metro.exe` is SteamStub-protected (`.text` entropy 8.0). Early "97.8 % encrypted code" conclusions came
   from disassembling encrypted bytes. The unpacked exe analyses normally.

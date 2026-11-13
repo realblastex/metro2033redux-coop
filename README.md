@@ -32,6 +32,10 @@ What works:
 - Host death: both games restart and load the host's last checkpoint (`auto_save`, or `coop_session` = the save
   made when hosting started if no checkpoint came since), then the host hosts and the client joins again by
   themselves (about 65 s; FINDINGS 5.9, 5.10).
+- Story level changes: the host goes on to the next level and hosts again there; the client restarts and joins
+  the new level by itself (about 40 s). The host starts each new level with that level's own loadout: items
+  carried over from the last level are lost (FINDINGS 5.11). Tested with console `change_map`, not yet with a
+  level's own end.
 - Checkpoint saves written while hosting load again (FINDINGS 5.10). The joiner's game writes no saves while it is in
   a session, so its own saves stay untouched.
 - The windows are titled `Metro Redux [host]` and `Metro Redux [client]` after `@host` / `@join`.
