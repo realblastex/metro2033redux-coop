@@ -405,6 +405,25 @@ exact steps of the original repro (it may have used other diagnostic commands, o
 New diagnostics: `@inv <id>`, `@links <id>`, `@refs <id> [len] [via]`, `@select <id> <state>`, `@detach <id>`,
 `@setflag <id> <clear> <set>`, `@hexdump <id> [len]`.
 
+### 5.8 Fight test level: l03_chase handcar (session 8, 2026-11-13)
+
+How the saves were made (single instance, verified): `disconnect;server;map 2033\l03_chase` from the menu, then pad A
+on the loading screen ("press A to continue"; it waits) and `@finish_load`. The player rides a handcar
+(`drezina_dummy_0001`). About 110 s after `@finish_load` the player draws the revolver, and about 60 s later a
+scripted white-light vision starts. Saves (console `gamesave <name>`, loaded with `gameload <name>`):
+- `coop_ch3`: about 110 s into the ride, just before the vision.
+- `coop_cx1`: after the vision. About 16 s after loading, a nosalis
+  (`nosalis_trolley_jump_rigth_eugen_attacker`, id 0x104) jumps onto the handcar. An idle player dies at about 40 s.
+
+Two players (verified, same day):
+- `smoke_test.ps1 -Save coop_ch3`: PASS (8 checks). Both players went through the vision without a crash.
+- From `coop_cx1`: the nosalis and the handcar (id 0x161, f=3, b6=1) exist on both sides with the same ids. The
+  host died to the nosalis and got the single-player death menu ("load last checkpoint"). The client stayed alive,
+  but its body does not ride the handcar: it stays where it spawned, and the handcar leaves it behind in the dark.
+
+Open (unknown): how the single-player player is attached to the handcar (needed for the joiner); what co-op should
+do when the host dies (now: single-player game over for the host only).
+
 ## 6. Corrections to early analysis
 - The Steam `metro.exe` is SteamStub-protected (`.text` entropy 8.0). Early "97.8 % encrypted code" conclusions came
   from disassembling encrypted bytes. The unpacked exe analyses normally.
