@@ -455,6 +455,15 @@ Verified, `coop_ch3`, two instances:
 - The handcar `drezina_hand_true_0001` is not networked. Each side's level script moves its own copy, and the
   client's copy ran up to 22 m behind the host's. So the host sees the client riding a cart that isn't there
   ("stuck in the air behind"). Open: drive the client's cart from the host's body position, or network it.
+- Both sides' scripts stay in step: both entered the vision within 3 s and left it at the same time, at the same
+  spot (x -721). After the vision the client's cart is slower: 27 m in 10 s against the host's 37 m. So the cart's
+  speed is not networked (it may depend on the pumping: strings `drezina_pump`, `drezina_speed`, `trolley/check pumping`).
+
+"Wait for the players" (owner request: the host plays a cutscene before the client is in), tried:
+- Hosting on the loading screen ("press A", game paused) and starting after the client connects: the client never
+  gets the level (net time is frozen while paused), and the host crashed when it spawned the body (AV RVA 0x6A9AB5).
+- Console `time_mul 0.001` after hosting: the world did not slow down (the handcar kept moving). The join worked.
+- Unknown: a way to hold the level script and world while the network keeps running.
 
 ### 5.9 Host death: reload for both players (session 8, 2026-11-13)
 
