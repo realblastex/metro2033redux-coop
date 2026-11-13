@@ -402,6 +402,20 @@ Retest (session 8, 2026-11-13, build `5fd4b6f`): not reproduced. Two runs on `l1
 with the host skipping the network inventory apply (RVA 0x25DB20) looked the same, so it tells nothing. Unknown: the
 exact steps of the original repro (it may have used other diagnostic commands, or a different body position).
 
+Owner report (session 11, 2026-11-13): the two weapons still happen on the client, and a weapon switch clears them.
+In l04_riga's opening bar scene the client's body holds a gun while the host's (script-holstered) doesn't.
+- Verified (client, l04 after a carry-over transition, ~30 s after joining): the host's body as the client sees it
+  (`@inv F107`, network inventory class) has state byte 22 (0x16). Items with flag 0x100: `wpn_macheta_0002`
+  (s11), `ammo_762x39_mg_0001` (s22), `player_map_0005`, `lighter_0002`, `charger_0011`. Session 7's l19 run also
+  logged 0x16 for the client's body while it held the AK, so 22 is not a general "unarmed" value.
+- Derived (disassembly of RVA 0x25DB20): old = inv[8] & 0x1F, new = state & 0x1F; when they differ and neither is
+  4: item = inv vtbl+0xC8(inv, slot, 1); old item vtbl+0xE8 (holster), new item vtbl+0xD0 (draw), then the
+  controller `*(inv+0x28)` vtbl+0x88(ctrl, old, new, old item, new item). Bit 0x20 (gas mask) goes through slot 4
+  (item vtbl+0x178 / +0x180). Untested idea: run this sequence on the client's own body (its class has a bare `ret`
+  at vtbl+0x2F8) to holster it while a level script holsters the host.
+- Unknown: how a level script holsters the single-player player (`take_item [unarmed_box]` was logged in Hunter),
+  and which state means "nothing in hand".
+
 New diagnostics: `@inv <id>`, `@links <id>`, `@refs <id> [len] [via]`, `@select <id> <state>`, `@detach <id>`,
 `@setflag <id> <clear> <set>`, `@hexdump <id> [len]`.
 
