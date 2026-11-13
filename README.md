@@ -33,6 +33,8 @@ What does not work yet:
 
 - Both bodies spawn on the same spot; `@join` then moves the client 1.2 m in front of the host. A wall there would
   block that. See [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
+- The client sees two weapons after a weapon switch: hands hold the new gun and the old one stays in view
+  (FINDINGS 5.7, not fixed yet).
 - The host draws the client's body wrong: up close it shows a big bare arm with a blade, while the client holds its
   AK. The client's weapon choice never reaches the host.
 - NPCs near the players replicate from the host (distance priority, ~128 bytes per packet); far NPCs did not update
@@ -195,6 +197,8 @@ In `<game dir>\metro_coop\`, next to the DLL. Created with defaults on first run
 | `@respawn [slot]` | host: give net slot `slot` (default 1) a new body; runs by itself 5 s after that body dies |
 | `@aim <id hex> [ms]` | turn this instance's view toward entity `id` with the fake right stick (yaw only) |
 | `@title <text>` | rename this instance's window (`@host` / `@join` set `[host]` / `[client]`) |
+| `@place left\|right` | windowed: move this window to the left edge, or right next to the `[host]` window on this PC (`@host` / `@join` do it, so two copies sit side by side) |
+| `@inv` / `@links` / `@refs` / `@select` / `@detach` / `@setflag` / `@hexdump` | diagnostics for the weapon bug (FINDINGS 5.7) |
 | `@goto <id hex> [dist]` | move the entity this instance controls `dist` m (default 2) in front of entity `id` |
 | `@spawn <id hex>` | host only: spawn a copy of entity `id` through the engine's network spawn event (diagnostics) |
 | `@dump [filter]` | log id, name, position and flags of entities whose name contains `filter` (diagnostics) |

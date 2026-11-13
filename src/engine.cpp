@@ -95,6 +95,11 @@ static const char* entity_name(uint8_t* e) {
     } __except (EXCEPTION_EXECUTE_HANDLER) { return "?"; }
 }
 
+// Reads a u32 that may be unmapped; false if it faults. Diagnostics only.
+static bool safe_u32(const void* p, uint32_t* out) {
+    __try { *out = *(const uint32_t*)p; return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
 // g_server's entity with this id (table *(g_server+0x10), 16-byte entries, entity at +8, count u16 at +0x1A), or null
 static uint8_t* entity_by_id(unsigned id) {
     uint8_t* server = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD850);  // shortcut: fixed RVA
@@ -302,6 +307,29 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     }, 0);
                     continue;
                 }
+                if (c.rfind("@place ", 0) == 0) {
+                    // "@place left|right": windowed only. left = left edge of its monitor; right = just right of the
+                    // "Metro Redux [host]" window when that runs on this PC (else the monitor's right edge). Next to
+                    // the host instead of the monitor edge because the game is not DPI aware: with display scaling
+                    // it sees a 2560 px monitor as 1920 px wide.
+                    static bool right;
+                    right = c.substr(7) == "right";
+                    EnumThreadWindows(GetCurrentThreadId(), [](HWND w, LPARAM) -> BOOL {
+                        if (!IsWindowVisible(w) || GetParent(w) || !(GetWindowLongA(w, GWL_STYLE) & WS_CAPTION)) return TRUE;
+                        if (IsIconic(w)) ShowWindow(w, SW_SHOWNOACTIVATE);  // unfocused copies start minimized
+                        MONITORINFO mi{sizeof(mi)};
+                        GetMonitorInfoA(MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST), &mi);
+                        RECT r, h;
+                        GetWindowRect(w, &r);
+                        int x = mi.rcWork.left - 7;  // visible edge at the monitor edge (7 px invisible border)
+                        HWND host = right ? FindWindowA(nullptr, "Metro Redux [host]") : nullptr;
+                        if (host && host != w && GetWindowRect(host, &h)) x = h.right - 14;  // 2 x 7 px invisible border
+                        else if (right) x = mi.rcWork.right - (r.right - r.left);
+                        SetWindowPos(w, nullptr, x, mi.rcWork.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                        return TRUE;
+                    }, 0);
+                    continue;
+                }
                 if (c.rfind("@aim ", 0) == 0) {
                     unsigned id = 0xFFFF, ms = 3000;  // "@aim <id hex|s<slot>> [ms]"
                     int slot = -1;
@@ -456,6 +484,152 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         ++shown;
                     }
                     LOG_INFO("engine: dump done, " + std::to_string(n) + " entities, " + std::to_string(shown) + " shown");
+                    continue;
+                }
+                if (c.rfind("@links ", 0) == 0) {  // diagnostics: "@links <id hex>": entity ids behind the player's
+                    // hands/knife/torch/heap/timer links (+0x1740.., loader RVA 0x1DB3D0), for base e and e+0xA0
+                    unsigned id = 0;
+                    sscanf(c.c_str() + 7, "%x", &id);
+                    uint8_t* e = entity_by_id(id);
+                    for (int base = 0; e && base <= 0xA0; base += 0xA0) {
+                        std::string out = "engine: links " + std::to_string(id) + " base+" + std::to_string(base) + ":";
+                        for (unsigned off = 0x1740; off <= 0x17A0; off += 0x10) {
+                            uint32_t lo, hi, t_lo, t_hi, idw = 0;
+                            char b[32] = " ?";
+                            if (safe_u32(e + base + off, &lo) && safe_u32(e + base + off + 4, &hi)) {
+                                uint8_t* ph = (uint8_t*)(((uint64_t)hi << 32) | lo);
+                                if (!ph) snprintf(b, sizeof(b), " null");
+                                else if (safe_u32(ph, &t_lo) && safe_u32(ph + 4, &t_hi)) {
+                                    uint8_t* t = (uint8_t*)(((uint64_t)t_hi << 32) | t_lo);
+                                    snprintf(b, sizeof(b), t && safe_u32(t + 0x68, &idw) ? " %X" : " t0", idw & 0xFFFF);
+                                }
+                            }
+                            out += b;
+                            if (safe_u32(e + base + off + 8, &idw)) {  // link: {handle*, u16 id, bool valid}
+                                snprintf(b, sizeof(b), "[%X/%u]", idw & 0xFFFF, (idw >> 16) & 0xFF);
+                                out += b;
+                            }
+                        }
+                        LOG_INFO(out);
+                    }
+                    continue;
+                }
+                if (c.rfind("@inv ", 0) == 0) {
+                    // "@inv <id hex>": the body's inventory (*(e+0xB70)): state byte at +8 (low 5 bits = active slot,
+                    // 0x20 = gas mask; applied by RVA 0x25DB20). Items as the slot getter RVA 0x25C740 walks them:
+                    // owner = *(*(inv+0x28)+8), handles at owner+0x150 (count u16 +0x15A) -> entity+0xA0; item
+                    // interface = entity vtbl+0x6F0, slot byte at item+0xAA, item vtbl+0x48 = usable.
+                    uint8_t* e = entity_by_id(strtoul(c.c_str() + 5, nullptr, 16));
+                    uint8_t* inv = e ? *(uint8_t**)(e + 0xB70) : nullptr;
+                    if (!inv) { LOG_WARN("engine: inv: no entity/inventory"); continue; }
+                    uint8_t* owner = *(uint8_t**)(*(uint8_t**)(inv + 0x28) + 8);
+                    std::string out = "engine: inv state=" + std::to_string(inv[8]) + ":";
+                    for (int k = 0; owner && k < *(uint16_t*)(owner + 0x15A); ++k) {
+                        uint8_t* t = **(uint8_t***)(*(uint8_t**)(owner + 0x150) + k * 8);
+                        if (!t) continue;
+                        uint8_t* it_e = t - 0xA0;
+                        using vf_t = uint8_t*(__fastcall*)(void*);
+                        uint8_t* item = ((vf_t)(*(void***)it_e)[0x6F0 / 8])(it_e);
+                        char b[112];
+                        snprintf(b, sizeof(b), " %X'%s'f%X", *(uint16_t*)(it_e + 0x108), entity_name(t), *(uint32_t*)(it_e + 0x10C));
+                        out += b;
+                        if (item) {
+                            snprintf(b, sizeof(b), "=s%u", item[0xAA]);
+                            out += b;
+                        }
+                    }
+                    LOG_INFO(out);
+                    continue;
+                }
+                if (c.rfind("@detach ", 0) == 0) {  // diagnostics: "@detach <id hex>" = attach RVA 0x6DD360 to a null parent
+                    uint8_t* x = entity_by_id(strtoul(c.c_str() + 8, nullptr, 16));
+                    uint8_t* exe = (uint8_t*)GetModuleHandleA(nullptr);
+                    if (x && exe[0x6DD360] == 0x40 && exe[0x6DD363] == 0x56) {
+                        using attach_t = void*(__fastcall*)(void*, void**, void**, uint8_t*);
+                        void *out = nullptr, *parent = nullptr;
+                        uint8_t flags = 0;
+                        ((attach_t)(exe + 0x6DD360))(x, &out, &parent, &flags);
+                        LOG_INFO(std::string("engine: detach ") + entity_name(x + 0xA0));
+                    }
+                    continue;
+                }
+                if (c.rfind("@select ", 0) == 0) {
+                    // "@select <id hex> <state hex>": apply an inventory state byte to the body (inventory vtbl+0x2F8 =
+                    // RVA 0x25DB20: low 5 bits = slot to draw, 0x20 = gas mask; holsters the old slot's item, draws
+                    // the new one and notifies the weapon controller)
+                    unsigned id = 0, st = 0;
+                    sscanf(c.c_str() + 8, "%x %x", &id, &st);
+                    uint8_t* x = entity_by_id(id);
+                    uint8_t* inv = x ? *(uint8_t**)(x + 0xB70) : nullptr;
+                    if (!inv) { LOG_WARN("engine: select: no inventory"); continue; }
+                    uint8_t b8 = (uint8_t)st, was = inv[8];
+                    using apply_t = void(__fastcall*)(void*, uint8_t*);
+                    ((apply_t)(*(void***)inv)[0x2F8 / 8])(inv, &b8);
+                    char b[96];
+                    snprintf(b, sizeof(b), "engine: select %X state %X -> %X (apply %p)", id, was, inv[8], (*(void***)inv)[0x2F8 / 8]);
+                    LOG_INFO(b);
+                    continue;
+                }
+                if (c.rfind("@refs ", 0) == 0) {
+                    // "@refs <id hex> [len hex]": diagnostics. Scan the entity's first len bytes for references to
+                    // other entities: a pointer to e+0xA0 (uobject base) or to a handle block whose first qword is one.
+                    // "[via hex]": scan the object at *(e+via) instead (inventory +0xB70, weapon controller +0x12A8)
+                    unsigned id = 0, len = 0x2000, via = 0;
+                    sscanf(c.c_str() + 6, "%x %x %x", &id, &len, &via);
+                    uint8_t* self = entity_by_id(id);
+                    uint8_t* e = self && via ? *(uint8_t**)(self + via) : self;
+                    std::string out = "engine: refs " + std::to_string(id) + " via " + std::to_string(via) + ":";
+                    auto as_entity = [](uint64_t p) -> uint8_t* {  // p == x+0xA0 of a real entity x?
+                        uint32_t lo, hi, idw;
+                        if (p < 0x10000 || p > 0x7FFFFFFFFFFF || (p & 7) || !safe_u32((void*)(p + 0x68), &idw)) return nullptr;
+                        uint8_t* x = entity_by_id(idw & 0xFFFF);
+                        (void)lo; (void)hi;
+                        return x && x + 0xA0 == (uint8_t*)p ? x : nullptr;
+                    };
+                    for (unsigned o = 0; e && o + 8 <= len; o += 8) {
+                        uint32_t lo, hi;
+                        if (!safe_u32(e + o, &lo) || !safe_u32(e + o + 4, &hi)) break;
+                        uint64_t p = ((uint64_t)hi << 32) | lo;
+                        uint8_t* x = as_entity(p);
+                        const char* how = "";
+                        if (!x && p > 0x10000 && p < 0x7FFFFFFFFFFF && !(p & 7) && safe_u32((void*)p, &lo) && safe_u32((void*)(p + 4), &hi)) {
+                            x = as_entity(((uint64_t)hi << 32) | lo);
+                            how = "h";
+                        }
+                        if (!x || x == self) continue;
+                        char b[80];
+                        snprintf(b, sizeof(b), " +%X%s=%X'%s'", o, how, *(uint16_t*)(x + 0x108), entity_name(x + 0xA0));
+                        out += b;
+                    }
+                    LOG_INFO(out);
+                    continue;
+                }
+                if (c.rfind("@hexdump ", 0) == 0) {  // diagnostics: "@hexdump <id hex> [len hex]" raw entity bytes
+                    unsigned id = 0, len = 0x600;
+                    sscanf(c.c_str() + 9, "%x %x", &id, &len);
+                    uint8_t* e = entity_by_id(id);
+                    for (unsigned o = 0; e && o < len; o += 32) {
+                        char b[160];
+                        int n = snprintf(b, sizeof(b), "engine: hex %X +%03X:", id, o);
+                        uint32_t v;
+                        bool ok = true;
+                        for (unsigned k = 0; k < 32 && (ok = safe_u32(e + o + k, &v)); k += 4) n += snprintf(b + n, sizeof(b) - n, " %08X", v);
+                        if (!ok) break;
+                        LOG_INFO(b);
+                    }
+                    continue;
+                }
+                if (c.rfind("@setflag ", 0) == 0) {  // diagnostics: "@setflag <id hex> <clear hex> <set hex>" on +0x10C
+                    unsigned id = 0, clr = 0, set = 0;
+                    sscanf(c.c_str() + 9, "%x %x %x", &id, &clr, &set);
+                    if (uint8_t* e = entity_by_id(id)) {
+                        uint32_t& f = *(uint32_t*)(e + 0x10C);
+                        uint32_t was = f;
+                        f = (f & ~clr) | set;
+                        char b[96];
+                        snprintf(b, sizeof(b), "engine: setflag %X f %X -> %X", id, was, f);
+                        LOG_INFO(b);
+                    } else LOG_WARN("engine: setflag: no entity " + std::to_string(id));
                     continue;
                 }
                 if (c.rfind("@fix_ammo", 0) == 0) {

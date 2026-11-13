@@ -356,6 +356,49 @@ Other open items:
 - Host logs `!G can't find player on level for take_item` and `entity_players_torch: player is absent` in MP-mode
   loads (scripts expect one single-player actor).
 
+### 5.7 Client sees two weapons (session 7, 2026-11-13, unresolved)
+
+Owner report: the client holds an AK and a revolver at once, and an inspect animates both. Reproduced on `l19_defence`
+with a pad Y press on the client (weapon switch). The switch shows up 10 to 20 s later. Afterwards the hands hold
+the revolver and a dark AK stays at the right of the view (screenshots in the private workspace).
+
+Verified:
+- The stuck gun is the client body's own cloned AK (`2124`, parent = client body `167`): `@detach 2124` made it
+  vanish from the view, and a normally lit AK lay in the world instead.
+- It is not caused by network state. On the client, the player state reader (RVA 0x27BF20, player vtbl+0x188 path:
+  base state, u16 at e+0x18A2, weapon byte at e+0x18A4, then inventory vtbl+0x2F8) runs only for the host's body. The
+  host runs it for the client's body (weapon byte 0x16, then 0x56, then 0x42).
+- Two inventory classes (inventory = `*(e+0xB70)`). Network class: vtbl+0x2F8 = RVA 0x25DB20 applies the state byte
+  (low 5 bits = active slot, 0x20 = gas mask). It holsters the old slot's item (item vtbl+0xE8) and draws the new one
+  (+0xD0), then notifies the weapon controller. Its vtbl+0x300 (RVA 0x25DC80) just returns the stored byte at inv+8.
+  Single-player class: vtbl+0x2F8 = RVA 0x4F8110, a bare `ret`. The host's own body and the client's own body have
+  the single-player class. Each side's copy of the other player's body has the network class.
+- Item list: owner `*(*(inv+0x28)+8)`, handles at owner+0x150 (count u16 +0x15A) to entity+0xA0. The item interface
+  is entity vtbl+0x6F0 and the slot byte is item+0xAA (slot getter RVA 0x25C740). The clone renumbers slots. In l19 the
+  original has duplet 1, revolver 2 and AK 16. The clone has revolver 1 and AK 2, and its duplet lies detached in the
+  world (`2323`, f=0x10103).
+- The player links its items in entity_link fields `{handle*, u16 id, bool valid}` at e+0x1740 (hands), +0x1750 (knife),
+  +0x1760 (torch), +0x1770 (heap), +0x1780 (timer), +0x1790 (timer_2033). The loader is RVA 0x1DB3D0. On the clone,
+  hands, knife and timer_2033 have the right ids but null handles. FUN_140034b50 resolves a link lazily, and
+  RVA 0x6A3CC0 (g_server, &out, id) returns a ref-counted handle.
+- "Is this entity the controlled player's hands?" (RVA 0x1D8920, a virtual in every entity vtable, and 0x1F4EA0) uses
+  `*(g_level+0x38)` vtbl+0x6E0, then its hands link.
+- None of these removed the stuck AK: resolving the clone's null links, copying the original slot numbers onto the
+  clone's items, setting flag 0x1, 0x2000, 0x4000 or 0x8000 on the AK, or calling the AK item's deactivate (+0xE8).
+  Deactivate removed the AK and the hands but left the revolver frozen mid-draw. Pad Y never called item
+  +0xD0/+0xE8, so local switching uses another path.
+
+Derived: the AK left after the switch is lit like a world object, while the revolver in the hands is lit as HUD.
+Guess: the holster detaches the AK from the HUD, but the clone's inventory weapons are still drawn in the world near
+the camera. The single-player player normally hides them.
+
+Unknown: what hides holstered weapons of the local player in single-player, and why the switch fires 10 to 20 s
+late. Next: find the local weapon-switch path (watch writes to the AK entity while switching, `@watch`), or create the
+joiner's body from the level's original player record instead of cloning the live player.
+
+New diagnostics: `@inv <id>`, `@links <id>`, `@refs <id> [len] [via]`, `@select <id> <state>`, `@detach <id>`,
+`@setflag <id> <clear> <set>`, `@hexdump <id> [len]`.
+
 ## 6. Corrections to early analysis
 - The Steam `metro.exe` is SteamStub-protected (`.text` entropy 8.0). Early "97.8 % encrypted code" conclusions came
   from disassembling encrypted bytes. The unpacked exe analyses normally.
