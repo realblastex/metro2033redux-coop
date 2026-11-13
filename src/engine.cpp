@@ -136,14 +136,38 @@ static uintptr_t __fastcall player_data_hook(void* a, void* data, int flag) {
         LOG_INFO("engine: level player data skipped (no controlled entity)");
         return 1;
     }
-    // Host on a story level change: the carried-over items get ids 0x0..0x23, and a client joining that world
-    // crashed in the qsave load (FINDINGS 5.11); the level's own player loadout (as in a fresh "map") works.
-    // shortcut: the host loses the inventory carried over from the last level; re-id the items to keep it.
-    if (engine_hosting()) {
-        LOG_INFO("engine: level player data skipped (hosting: carry-over items break joining)");
+    // Host on a story level change: the record creator RVA 0x6A5B90 gives the carried-over items low ids
+    // (0x0..0x23: record ids < 0x100 kept, children from the low pool RVA 0x4B170), and a client joining that
+    // world crashed in the qsave load (FINDINGS 5.11). While hosting, three patches send every record through the
+    // normal allocator RVA 0x4BBE0 (ids >= 0x100, old->new pair in the remap map) and remap low parent ids too.
+    struct { uint32_t rva; const char* orig; const char* patch; int n; } p[] = {
+        {0x6A5DA3, "\x0F\x86\x9D\x01\x00\x00", "\x90\x90\x90\x90\x90\x90", 6},  // id < 0x100: no keep-as-is branch
+        {0x6A5E23, "\x74\x0E", "\xEB\x0E", 2},                                // child: 0x4BBE0, not the low pool
+        {0x6A5F8C, "\xB9\x00\x01\x00\x00", "\xB9\x00\x00\x00\x00", 5},        // parent remap from id 0, not 0x100
+    };
+    uint8_t* exe = (uint8_t*)GetModuleHandleA(nullptr);
+    bool patch = engine_hosting();
+    for (auto& q : p) patch = patch && memcmp(exe + q.rva, q.orig, q.n) == 0;
+    if (engine_hosting() && !patch) {
+        LOG_INFO("engine: level player data skipped (hosting, unknown exe bytes)");
         return 1;
     }
-    return g_player_data_orig(a, data, flag);
+    auto put = [&](bool on) {
+        for (auto& q : p) {
+            DWORD old;
+            VirtualProtect(exe + q.rva, q.n, PAGE_EXECUTE_READWRITE, &old);
+            memcpy(exe + q.rva, on ? q.patch : q.orig, q.n);
+            VirtualProtect(exe + q.rva, q.n, old, &old);
+        }
+        FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
+    };
+    if (patch) put(true);
+    uintptr_t r = g_player_data_orig(a, data, flag);
+    if (patch) {
+        put(false);
+        LOG_INFO("engine: level player data applied with new ids (hosting)");
+    }
+    return r;
 }
 static uintptr_t __fastcall save_hook(void* mgr, const char* name) {
     uint8_t mp = g_mp_flag ? *g_mp_flag : 0;

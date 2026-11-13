@@ -570,17 +570,39 @@ What the mod does:
   the host's new level (fresh process, as after a host death).
 - Host: once it has hosted, every new level start runs `@host` again (new `coop_session`, slot 0 linked to the new
   level's player, stale slots trimmed).
-- While hosting, RVA 0x3CA400 is skipped: the host gets the new level's own loadout instead of the carried-over
-  inventory. Also skipped when there is no controlled entity.
+- While hosting, RVA 0x3CA400 runs with three byte patches in RVA 0x6A5B90 (session 11, see below), so the
+  carried-over items get normal ids. It is skipped when there is no controlled entity (client).
 - `@spawn_player` logs the source ids and names of the body's entities (diagnostics).
+
+Session 11 (2026-11-13), carried-over inventory kept while hosting:
+- Derived (decompile of RVA 0x2082F0, the level end code that calls `change_map %s` at RVA 0x20849A): a level end
+  runs console `save_player <level>` and then `change_map <level>` (no `save_player` on 2033\l36_ostankino and
+  2034\l20_d6_defense, the last levels). A typed `change_map` alone writes no `.player` data, so RVA 0x3CA400
+  then has nothing to apply (verified: no call in that run). Unknown where session 9's carry-over data came from.
+- Derived (disassembly of RVA 0x6A5B90): a child record (parent id != 0xFFFF) with id >= 0x100 gets a new id
+  from the low pool (RVA 0x4B170 on g_server+0x120), not from RVA 0x4BBE0; only roots go to RVA 0x4BBE0. That is
+  where ids 0x0..0x23 come from. Parent ids are remapped only in 0x100..0xFFFE (`sub 0x100; cmp 0xFEFE; ja`,
+  the only such check in the exe). RVA 0x4BBE0 returns a fresh id >= 0x100 for any id < 0x100.
+- The mod (host, while hosting, only during RVA 0x3CA400; bytes checked first, else the old skip): NOP the
+  `jbe` at RVA 0x6A5DA3 (record ids < 0x100 also go through the old->new map), `je` -> `jmp` at RVA 0x6A5E23
+  (children also use RVA 0x4BBE0), and `mov ecx, 0x100` -> `mov ecx, 0` at RVA 0x6A5F8C (low parent ids are
+  remapped too). Patches are undone right after the call.
+- Verified (two instances, `coop_ch3` l03_chase, host hosting: `save_player 2033\l04_riga`, `change_map
+  2033\l04_riga`): host log `level player data applied with new ids (hosting)`; the joiner's body copied from the
+  host in l04 holds the same items as in l03 (`wpn_revolver_0000`, `wpn_ubludok_fx_0000`, both `@clone@` parts,
+  `medkit_0001`, `ammo_money_0013`), every id >= 0x100; a fresh l04 has a different loadout (no revolver,
+  `medkit_0114`). The client restarted, joined l04, controls its body (`ctl=BD00`), both alive ~2 min, no crash,
+  hosted checkpoint `coop_auto_save` written. Smoke PASS after the change: Hunter 8, `-Save coop_l19 -Respawn` 10,
+  `-Launcher` 8.
+- Unknown: whether the weapons work in the host's hands after the re-id (link remap via entity vtbl+0xB70 was not
+  read; no fire test was run in l04), and whether an SP save written after this transition loads.
 
 Verified end to end: host `change_map` l03_chase -> l04_riga while hosting, the host re-hosted, the client
 restarted, joined the host's l04 and controlled its body (`ctl=26D`, screenshot in the Riga bar); no crash in
 3.5 min. Smoke tests PASS: Hunter (8), `-Save coop_l19 -Respawn` (10), `-Launcher` (8).
 
 Open:
-- The carried-over inventory is lost for the host on every level change (to fix: re-id the items, or find why
-  the ids break the client).
+- (Fixed in session 11, above.) The carried-over inventory was lost for the host on every level change.
   Derived (session 10, decompile): 0x3CA400 reads `chunk_player_data` -> `entities` with RVA 0x6A59D0, which
   creates each record with RVA 0x6A5B90 and then remaps links (entity vtbl+0xB70) through an old->new id map.
   In 0x6A5B90 a record id below 0x100 is kept as is: it is reserved in a separate low-id pool at g_server+0x120
@@ -588,7 +610,8 @@ Open:
   through the map and get fresh ids (RVA 0x4BBE0: pool at g_server+0x148, + 0x100). So the `.player` file stores
   the body's items with low ids on purpose (carry-over id space); they keep them in every later save.
   Records with no parent (parent id 0xFFFF) are also passed to RVA 0x747F60 (the engine net list).
-- Only `change_map` from the console was tested, not a level's own end trigger (`triggers/game/next level`).
+- Only the console commands were tested (session 11: the same pair a level end runs), not a level's own end
+  trigger (`triggers/game/next level`) reached by playing.
   Derived (session 10): the `change_map %s` callers checked (RVA 0x51D60, and RVA 0x20849A in the save manager's
   code) format the command into the console (console vtbl+0x40), so they reach the same handler and worker
   RVA 0x540C0 as a typed `change_map`. 15 references to that string in all (xref.py); not every one was read.

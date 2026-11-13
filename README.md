@@ -33,9 +33,9 @@ What works:
   made when hosting started if no checkpoint came since), then the host hosts and the client joins again by
   themselves (about 65 s; FINDINGS 5.9, 5.10).
 - Story level changes: the host goes on to the next level and hosts again there; the client restarts and joins
-  the new level by itself (about 40 s). The host starts each new level with that level's own loadout: items
-  carried over from the last level are lost (FINDINGS 5.11). Tested with console `change_map`, not yet with a
-  level's own end.
+  the new level by itself (about 40 s). The host keeps the inventory carried over from the last level, and the
+  joiner's new body is a copy of it (FINDINGS 5.11). Tested with the console commands a level's end runs
+  (`save_player <level>`, then `change_map <level>`), not yet by playing a level to its end.
 - Checkpoint saves written while hosting load again (FINDINGS 5.10). They go to `coop_auto_save`, so the host's
   own single-player `auto_save` stays untouched. The joiner's game writes no saves while it is in a session, so its
   own saves stay untouched too.
