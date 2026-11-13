@@ -95,6 +95,12 @@ changed.
   (g_loader +0x16FE0 `{handles, u16 cap, u16 size}`, POP PAUSE RVA 0x664380).
 - Focus: the game polls `GetForegroundWindow` to pause when unfocused. `keep_active` hooks it and filters deactivation
   messages.
+- Session 11: the hook patches user32 itself, so other modules in the process got the fake answer too. Verified
+  (log of caller modules): `DINPUT8.dll`, `dxgi.dll` and the NVIDIA user-mode driver call it. Owner report: after
+  Alt-Tab out of a test game the mouse was sometimes invisible, or visible but clicks did nothing (DirectInput
+  holding the mouse while it believed the game was in front: derived, not reproduced here). Now only callers
+  inside metro.exe get the fake answer. Smoke PASS after it: Hunter 8, `-Save coop_l19 -Respawn` 10,
+  `-Launcher` 8. Not verified by the owner yet.
 
 ### 2.5 Input without a window
 `XInputGetState` (xinput1_3 ordinal 2) is hooked for pad 0 (`@pad`). Keyboard and mouse are DirectInput8 and need

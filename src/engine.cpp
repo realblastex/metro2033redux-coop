@@ -418,7 +418,26 @@ static LRESULT CALLBACK wndproc_hook(HWND h, UINT msg, WPARAM w, LPARAM l) {
 // above isn't enough: report our game window as foreground too.
 using gfw_t = HWND(WINAPI*)();
 static gfw_t g_gfw_orig = nullptr;
-static HWND WINAPI gfw_hook() { return g_game_hwnd ? g_game_hwnd : g_gfw_orig(); }
+// Only metro.exe's own focus check gets the fake answer: other modules in the process (DirectInput decides from the
+// real foreground window whether it may hold the mouse) must see the truth, or after Alt-Tab the game kept the mouse
+// (cursor hidden, clicks swallowed; owner report 2026-11-13).
+static HWND WINAPI gfw_hook() {
+    static HMODULE exe = GetModuleHandleA(nullptr);
+    HMODULE from = nullptr;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCSTR)_ReturnAddress(), &from);
+    if (from == exe) return g_game_hwnd ? g_game_hwnd : g_gfw_orig();
+    static HMODULE logged[8] = {};  // diagnostics: once per other module that asks
+    int k = 0;
+    while (k < 8 && logged[k] && logged[k] != from) ++k;
+    if (from && k < 8 && !logged[k]) {
+        logged[k] = from;
+        char n[MAX_PATH] = "?";
+        GetModuleFileNameA(from, n, MAX_PATH);
+        LOG_INFO(std::string("engine: GetForegroundWindow called from ") + n + " (real answer)");
+    }
+    return g_gfw_orig();
+}
 HWND engine_real_foreground_window() { return g_gfw_orig ? g_gfw_orig() : GetForegroundWindow(); }
 
 void engine_keep_active() {
