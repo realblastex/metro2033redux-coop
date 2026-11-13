@@ -281,7 +281,33 @@ static void ride_follow() {
         if (g_players && g_players->size >= 2 && *(int32_t*)((uint8_t*)g_players - 0x18 + 8) >= 1)
             host = entity_by_id(*(uint16_t*)((uint8_t*)g_players->array + 0x64));
         uint8_t* hp = host && host != me ? parent_of(host) : nullptr;
+        // The client's own script may attach our body to the same vehicle on the host's exact spot (l03 after the
+        // vision). Two bodies on one spot show the host's gun inside our view ("two weapons"). Detach ours (attach
+        // to no parent) and put it 0.9 m to the host's side; the follow below then carries it.
+        uint8_t* exe = (uint8_t*)GetModuleHandleA(nullptr);
+        if (hp && parent_of(me) == hp && exe[0x6DD360] == 0x40 && exe[0x6DD363] == 0x56) {
+            float dx = *(float*)(me + 0xF0) - *(float*)(host + 0xF0), dz = *(float*)(me + 0xF8) - *(float*)(host + 0xF8);
+            if (dx * dx + dz * dz < 0.36f) {
+                using attach_t = void*(__fastcall*)(void*, void**, void**, uint8_t*);
+                void *out = nullptr, *none = nullptr;
+                uint8_t flags = 0;
+                ((attach_t)(exe + 0x6DD360))(me, &out, &none, &flags);
+                alignas(16) float m[16];
+                memcpy(m, me + 0xC0, sizeof(m));
+                m[12] = *(float*)(host + 0xF0) + *(float*)(host + 0xC0) * 0.9f;  // host's right row (+0xC0)
+                m[13] = *(float*)(host + 0xF4);
+                m[14] = *(float*)(host + 0xF8) + *(float*)(host + 0xC8) * 0.9f;
+                using set_xform_t = void(__fastcall*)(void*, float*, int);
+                (*(set_xform_t**)me)[0x190 / 8](me, m, 0);
+                LOG_INFO("engine: ride: moved our body off the host's spot");
+            }
+        }
         if (!hp || parent_of(me)) hp = nullptr;
+        // only near the host: a scripted teleport (l03's vision) puts our body far away, and following then drags it back
+        if (hp) {
+            float dx = *(float*)(me + 0xF0) - *(float*)(host + 0xF0), dz = *(float*)(me + 0xF8) - *(float*)(host + 0xF8);
+            if (dx * dx + dz * dz > 25) hp = nullptr;
+        }
         if (hp != ride) {
             ride = hp;
             if (ride) for (int i = 0; i < 3; ++i) off[i] = *(float*)(me + 0xF0 + 4 * i) - *(float*)(ride + 0xF0 + 4 * i);
@@ -292,6 +318,11 @@ static void ride_follow() {
     alignas(16) float m[16];
     memcpy(m, me + 0xC0, sizeof(m));
     for (int i = 0; i < 3; ++i) m[12 + i] = *(float*)(ride + 0xF0 + 4 * i) + off[i];
+    // a jump of more than 5 m since our last set is a script teleport: stop following (re-checked every 250 ms)
+    {
+        float dx = *(float*)(me + 0xF0) - m[12], dz = *(float*)(me + 0xF8) - m[14];
+        if (dx * dx + dz * dz > 25) { ride = nullptr; LOG_INFO("engine: ride off (teleported)"); return; }
+    }
     using set_xform_t = void(__fastcall*)(void*, float*, int);
     (*(set_xform_t**)me)[0x190 / 8](me, m, 0);
 }

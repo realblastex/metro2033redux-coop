@@ -439,6 +439,23 @@ Riding (verified, same day):
 Open (unknown): how single player carries `player` (the joiner still can't walk or turn with the handcar); what
 co-op should do when the host dies (now the host gets the single-player death screen, the client plays on).
 
+### 5.8b Handcar follow-up (session 8, owner report: bouncing, two weapons, body behind the cart)
+
+Verified, `coop_ch3`, two instances:
+- The ride follow runs about 360 times a second (several per frame). Between two sets, the client's body
+  moved up to 0.35 m in y; this is the bounce the owner saw. Setting bit 0x80000 at entity+0x30 did not change it.
+  That bit is set on the single-player `player` only while it rides; other riding-only fields are +0x190..0x19C
+  (FLT_MAX) and +0x1348/0x134C (0x10).
+- After the vision, the client's own script attaches its body to the handcar on the host's exact spot. That brought
+  back the two-weapons view (two bodies on one spot). Fix: when our body has the host's vehicle as parent and is
+  within 0.6 m of the host, detach it (attach RVA 0x6DD360 with no parent), put it 0.9 m to the host's right and
+  follow. Result: one gun in the client's view, and only 0.03 m drift while following afterwards.
+- During the vision the follow had dragged the client back from the script's teleport (a 352 m jump). Now the
+  follow only starts within 5 m of the host and stops on a jump over 5 m.
+- The handcar `drezina_hand_true_0001` is not networked. Each side's level script moves its own copy, and the
+  client's copy ran up to 22 m behind the host's. So the host sees the client riding a cart that isn't there
+  ("stuck in the air behind"). Open: drive the client's cart from the host's body position, or network it.
+
 ### 5.9 Host death: reload for both players (session 8, 2026-11-13)
 
 Owner's choice: on a death, reload the checkpoint (a down/revive system maybe later).
