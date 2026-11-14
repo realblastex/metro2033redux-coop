@@ -742,7 +742,7 @@ Script actions (steps 2-4 of the hybrid plan, session 13):
   now with these block names as hints (session 12 ride_follow/`dummy_bar_act` note).
 - Unknown: why the replay shows the lock-camera/movement sequence twice (both copies arrived in one batch).
 
-### 5.13 Client level change without a restart (session 13, branch `level-follow`, unfinished)
+### 5.13 Client level change without a restart (session 13, branch `level-follow`)
 
 Goal: when the host runs `change_map`, the client follows in its own process instead of restarting the game.
 - Verified (disassembly): `change_map_cl` (handler RVA 0x54230) jumps straight to the worker RVA 0x540C0. The
@@ -762,8 +762,13 @@ Goal: when the host runs `change_map`, the client follows in its own process ins
   `@level_ready` (message type 4). Client: on it, dllmain runs `disconnect;@follow_done;@wait 3;@join <address>`
   in the same process; no session within 90 s, or no "ready" within 4 min, falls back to the old restart.
   `msg_peer_live` drops peers of a destroyed ENet host (ENetPeer+16 = its host).
-- Open: whether the restored MP flag keeps the client's net running; whether a second `connect` in the same
-  process loads the host's world (unknown; a host-side `gameload` after hosting crashes, 5.9).
+- Verified (`re_tools/l04_launch.ps1`, host coop_ch3 -> `change_map 2033\l04_riga`, client joined in l03): the
+  client logged `following (mp was 1)` then `(mp was 0)` for the second call, got `coopmsg level ready` 3 s later,
+  ran `disconnect` + `@join` in the same process, loaded the host's l04 (`mapstate_loaded_and_waiting` 2 s), and
+  got its body (`ctl=9F06`, at the bar next to the host). Host: `players=2`, slot 1 = 9F06. No restart, no crash
+  event, same client process start time. The l04 load was fast here because the files were cached.
+- Not tested yet: smoke tests on this branch, a real level end trigger, an uncached (slow) host load, the
+  fallbacks, and what the client sees in l04 (screenshots not read).
 
 ## 6. Corrections to early analysis
 - The Steam `metro.exe` is SteamStub-protected (`.text` entropy 8.0). Early "97.8 % encrypted code" conclusions came
