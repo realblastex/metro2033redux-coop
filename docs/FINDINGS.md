@@ -685,6 +685,24 @@ Open:
 - Test note: a client ini with `@join` in `exec_on_start` plus `mode=join` (written by the launcher on a
   restart) connects twice and loops.
 
+### 5.12 Our own message channel on the engine's ENet connection (session 13, 2026-11-14)
+
+Hybrid netcode: the engine MP keeps doing join, world load, bodies, NPCs, combat and respawn; our channel carries
+what it does not sync (script effects on `player`, vehicles, doors, cutscene waits).
+- Verified (old logs, both installs): the engine sends and receives only on ENet channel 0. First payload bytes seen:
+  sends 0, 2, 3, 4; receives 0, 10, 11, 12.
+- Derived (decompile of RVA 0x6B5D00): the receive loop copies every packet into the engine queue without looking at
+  the channel, so a separate channel id gives no isolation. Then it destroys the packet: freeCallback (+0x20), free
+  data unless flag 4 (NO_ALLOCATE), free packet, with the ENet allocator pointers at RVA 0xFE6D20/0xFE6D28.
+- Design: our packet = magic `FE 'M' 'C' '1'` + u8 type + payload, reliable, channel 0. `service_hook` (RVA
+  0x9410E0) removes matching packets before the engine sees them and calls enet_host_service again. All our sends
+  run inside `peer_send_hook` (RVA 0x93DB60) after the engine's own send, so ENet is only used where the engine
+  uses it. Peers = the ones the engine sends to; removed on a disconnect event.
+- Verified (smoke test `-Launcher`, PASS 8 checks): a ping every 5 s from both sides, each answered by a pong.
+  Host `msg_tx=36 msg_rx=36`, client `msg_tx=38 msg_rx=38` at the end of the run. Movement sync unchanged.
+- Test note: Windows Defender quarantines/blocks `injector.exe` (detections 2026-11-13 and 2026-11-14), so the
+  default smoke test can't inject; `-Launcher` works.
+
 ## 6. Corrections to early analysis
 - The Steam `metro.exe` is SteamStub-protected (`.text` entropy 8.0). Early "97.8 % encrypted code" conclusions came
   from disassembling encrypted bytes. The unpacked exe analyses normally.

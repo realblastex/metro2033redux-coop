@@ -46,6 +46,10 @@ bool engine_set_bind_port(uint16_t port);
 // Host: when a peer connects, queue "@spawn_player <its slot>" delay_s seconds later (0 = off).
 // engine_tick() (called from the DLL's loop) fires it.
 void engine_set_auto_spawn(uint32_t delay_s);
+
+// Queues one message on our own channel over the engine's ENet connection (to every peer; sent on the net thread
+// at its next service call). type 1/2 = ping/pong self-check. Any-thread safe; false if the queue is full.
+bool engine_msg_send(uint8_t type, const void* data, size_t len);
 void engine_tick();
 
 } // namespace metro_coop

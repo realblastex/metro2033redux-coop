@@ -1402,34 +1402,140 @@ static std::atomic<int> g_events_logged{0};
 static std::atomic<uint64_t> g_service_calls{0};
 // Client: the host's ENet disconnect (event type 2). The client keeps players=2 and its body after that (its level
 // runs on alone), so this is the only sign that the host left. The process restarts afterwards, so never reset.
-static int __fastcall service_hook(void* host, uint8_t* ev, uint32_t timeout) {
-    ++g_service_calls;
-    int r = g_service_orig(host, ev, timeout);
-    if (r > 0 && ev) {
-        uint32_t type = *(uint32_t*)ev;
-        if (type == 2 && local_slot() >= 1) g_host_gone = true;
-        uint8_t* pkt = *(uint8_t**)(ev + 24);
-        size_t len = (type == 3 && pkt) ? *(size_t*)(pkt + 24) : 0;
-        uint8_t first = (len && *(uint8_t**)(pkt + 16)) ? **(uint8_t**)(pkt + 16) : 0;
-        if (type != 3 || len > 4096 || g_events_logged++ < 150)
-            LOG_INFO("enet event type=" + std::to_string(type) + " ch=" + std::to_string(ev[16]) +
-                     " len=" + std::to_string(len) + " msg=" + std::to_string(first));
-    }
-    return r;
-}
-
 // Diagnostics: enet_peer_send(peer, channel, packet) (RVA 0x93DB60, resolved from its call in RVA 0x6B1D60).
 using peer_send_t = int(__fastcall*)(void*, uint8_t, uint8_t*);
 static peer_send_t g_peer_send_orig = nullptr;
 static std::atomic<int> g_sends_logged{0};
 static std::atomic<uint64_t> g_sends{0};
+
+// Our own message channel on the engine's ENet connection (hybrid netcode, FINDINGS 5.12). The engine only uses
+// channel 0 and queues every received packet without looking at the channel (RVA 0x6B5D00), so our packets go on
+// channel 0 with a magic prefix and service_hook removes them before the engine sees them.
+// Packet = kMsgMagic (4 bytes) + u8 type + payload. Reliable. Peers = the ones the engine itself sends to.
+// shortcut: no message before the engine's first send to a peer; fine, the engine sends every net frame.
+static const uint8_t kMsgMagic[4] = {0xFE, 'M', 'C', '1'};
+enum : uint8_t { MSG_PING = 1, MSG_PONG = 2 };
+static std::mutex g_msg_mtx;
+static std::vector<std::vector<uint8_t>> g_msg_out;  // queued by engine_msg_send, sent from peer_send_hook
+static void* g_msg_peers[4] = {};                    // only touched on the net thread (send/service hooks)
+static std::atomic<uint64_t> g_msg_tx{0}, g_msg_rx{0};
+// ENet allocator callbacks the engine's ENet uses (enet_malloc/enet_free, set at RVA 0xFE6D20/0xFE6D28).
+// shortcut: fixed RVAs of this exe build, like g_level; upgrade to a pattern if another build must work.
+using enet_malloc_t = void*(__cdecl*)(size_t);
+using enet_free_t = void(__cdecl*)(void*);
+static enet_malloc_t enet_malloc_fn() { return *(enet_malloc_t*)((uint8_t*)GetModuleHandleA(nullptr) + 0xFE6D20); }
+static enet_free_t enet_free_fn() { return *(enet_free_t*)((uint8_t*)GetModuleHandleA(nullptr) + 0xFE6D28); }
+
+// enet_packet_destroy, as the engine does it after copying a packet (RVA 0x6B5D00):
+// ENetPacket { size_t refCount; u32 flags; u8* data; size_t dataLength; void(*freeCallback)(ENetPacket*); void* userData; }
+static void msg_packet_destroy(uint8_t* pkt) {
+    if (auto cb = *(void(__cdecl**)(uint8_t*))(pkt + 32)) cb(pkt);
+    if (!(*(uint32_t*)(pkt + 8) & 4)) enet_free_fn()(*(void**)(pkt + 16));  // 4 = ENET_PACKET_FLAG_NO_ALLOCATE
+    enet_free_fn()(pkt);
+}
+
+// enet_packet_create(data, len, ENET_PACKET_FLAG_RELIABLE) + enet_peer_send on channel 0.
+static bool msg_send_raw(void* peer, const std::vector<uint8_t>& m) {
+    auto* pkt = (uint8_t*)enet_malloc_fn()(48);
+    if (!pkt) return false;
+    memset(pkt, 0, 48);
+    auto* data = (uint8_t*)enet_malloc_fn()(m.size());
+    if (!data) { enet_free_fn()(pkt); return false; }
+    memcpy(data, m.data(), m.size());
+    *(uint32_t*)(pkt + 8) = 1;  // ENET_PACKET_FLAG_RELIABLE
+    *(uint8_t**)(pkt + 16) = data;
+    *(size_t*)(pkt + 24) = m.size();
+    if (g_peer_send_orig(peer, 0, pkt) < 0) { msg_packet_destroy(pkt); return false; }  // refCount 0: still ours
+    ++g_msg_tx;
+    return true;
+}
+
+static void msg_send_all(const std::vector<uint8_t>& m) {
+    for (void* p : g_msg_peers) if (p) msg_send_raw(p, m);
+}
+
+static std::vector<uint8_t> msg_make(uint8_t type, const void* data, size_t len) {
+    std::vector<uint8_t> m(kMsgMagic, kMsgMagic + 4);
+    m.push_back(type);
+    m.insert(m.end(), (const uint8_t*)data, (const uint8_t*)data + len);
+    return m;
+}
+
+static void msg_handle(void* peer, const uint8_t* p, size_t len) {
+    ++g_msg_rx;
+    uint8_t type = p[4];
+    const uint8_t* body = p + 5;
+    size_t n = len - 5;
+    static int logged = 0;
+    if (type == MSG_PING && n >= 4) {
+        uint32_t seq = *(const uint32_t*)body;
+        if (logged++ < 20) LOG_INFO("coopmsg ping seq=" + std::to_string(seq) + " -> pong");
+        engine_msg_send(MSG_PONG, &seq, 4);  // sent from the engine's send path, see msg_flush
+    } else if (type == MSG_PONG && n >= 4) {
+        if (logged++ < 20) LOG_INFO("coopmsg pong seq=" + std::to_string(*(const uint32_t*)body));
+    } else if (logged++ < 20) {
+        LOG_INFO("coopmsg unknown type=" + std::to_string(type) + " len=" + std::to_string(len));
+    }
+}
+
+// Called after the engine's own enet_peer_send, so we only touch ENet in the context where the engine sends (the
+// send job may run on another thread than enet_host_service). Sends queued messages, plus a ping every 5 s.
+static void msg_flush() {
+    std::vector<std::vector<uint8_t>> out;
+    { std::lock_guard<std::mutex> lk(g_msg_mtx); out.swap(g_msg_out); }
+    for (auto& m : out) msg_send_all(m);
+    static uint64_t next_ping = 0;
+    static uint32_t seq = 0;
+    uint64_t now = GetTickCount64();
+    if (now >= next_ping) { next_ping = now + 5000; ++seq; msg_send_all(msg_make(MSG_PING, &seq, 4)); }
+}
+
+bool engine_msg_send(uint8_t type, const void* data, size_t len) {
+    std::lock_guard<std::mutex> lk(g_msg_mtx);
+    if (g_msg_out.size() > 1024) return false;  // no peer for a long time: drop instead of growing
+    g_msg_out.push_back(msg_make(type, data, len));
+    return true;
+}
+
+static int __fastcall service_hook(void* host, uint8_t* ev, uint32_t timeout) {
+    ++g_service_calls;
+    for (;;) {
+        int r = g_service_orig(host, ev, timeout);
+        if (r <= 0 || !ev) return r;
+        uint32_t type = *(uint32_t*)ev;
+        void* peer = *(void**)(ev + 8);
+        if (type == 2) {
+            if (local_slot() >= 1) g_host_gone = true;
+            for (void*& p : g_msg_peers) if (p == peer) p = nullptr;
+        }
+        uint8_t* pkt = *(uint8_t**)(ev + 24);
+        size_t len = (type == 3 && pkt) ? *(size_t*)(pkt + 24) : 0;
+        uint8_t* data = len ? *(uint8_t**)(pkt + 16) : nullptr;
+        if (data && len >= 5 && memcmp(data, kMsgMagic, 4) == 0) {  // ours: handle, free, service again
+            msg_handle(peer, data, len);
+            msg_packet_destroy(pkt);
+            continue;
+        }
+        uint8_t first = data ? *data : 0;
+        if (type != 3 || len > 4096 || g_events_logged++ < 150)
+            LOG_INFO("enet event type=" + std::to_string(type) + " ch=" + std::to_string(ev[16]) +
+                     " len=" + std::to_string(len) + " msg=" + std::to_string(first));
+        return r;
+    }
+}
+
 static int __fastcall peer_send_hook(void* peer, uint8_t ch, uint8_t* pkt) {
     ++g_sends;
+    bool known = false;
+    for (void* p : g_msg_peers) known |= p == peer;
+    for (void*& p : g_msg_peers) if (!known && !p) { p = peer; known = true; }
     size_t len = pkt ? *(size_t*)(pkt + 24) : 0;
     uint8_t first = (len && *(uint8_t**)(pkt + 16)) ? **(uint8_t**)(pkt + 16) : 0;
     if (len > 4096 || g_sends_logged++ < 60)
         LOG_INFO("enet send ch=" + std::to_string(ch) + " len=" + std::to_string(len) + " msg=" + std::to_string(first));
-    return g_peer_send_orig(peer, ch, pkt);
+    int r = g_peer_send_orig(peer, ch, pkt);
+    msg_flush();
+    return r;
 }
 
 // Diagnostics: net send job (RVA 0x6B4D00, queued every net frame). Gate: time global RVA 0xFC1124 >= [net_core+0xC].
@@ -1651,6 +1757,7 @@ std::string engine_stats() {
            " netframes=" + std::to_string(g_netframes.load()) +
            " players=" + std::to_string(g_players ? g_players->size : -1) +
            " service_calls=" + std::to_string(g_service_calls.load()) + " sends=" + std::to_string(g_sends.load()) +
+           " msg_tx=" + std::to_string(g_msg_tx.load()) + " msg_rx=" + std::to_string(g_msg_rx.load()) +
            " send_jobs=" + std::to_string(g_send_jobs.load()) + " next_send=" + std::to_string(g_last_next_send.load()) +
            " net_time=" + std::to_string(g_net_time ? *g_net_time : 0) +
            (g_loader ? " paused=" + std::to_string(((uint8_t*)g_loader)[0x3244]) + "/" + std::to_string(((uint8_t*)g_loader)[0x3245]) +
