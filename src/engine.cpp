@@ -13,6 +13,7 @@
 #include <share.h>
 #include <mutex>
 #include <vector>
+#include <unordered_map>
 #include <atomic>
 #include <optional>
 #include <bitset>
@@ -112,6 +113,8 @@ static void install_save_skip(uint8_t* exe) {
 // .player data (AV RVA 0x3CA468, FINDINGS 5.11). So a client in a session skips it and counts the host as gone:
 // dllmain restarts it and it joins the host's new level like after a host death.
 static int local_slot();
+static void act_run_local(const std::string& args);  // "@act <0|1> <ordinal> <name>"
+static void act_pending_run();
 using change_map_t = void(__fastcall*)(const char*);
 static change_map_t g_change_map_orig = nullptr;
 static void __fastcall change_map_hook(const char* level) {
@@ -256,6 +259,7 @@ bool engine_wait_log_hit() { return g_wait_hit; }
 // Count of "loader_finish: mapstate_running" lines = level starts since injection (the main menu is one too).
 static std::atomic<int> g_level_starts{0};
 int engine_level_starts() { return g_level_starts; }
+static std::atomic<int> g_level_loads{0};  // "loading content\maps\<level>\level": a level load begins (before its blocks)
 
 // Name of an entity (+0x110 -> string object, chars at +0x14); "?" if unreadable. Diagnostics only.
 static const char* entity_name(uint8_t* e) {
@@ -286,6 +290,7 @@ static uint8_t* controlled() {
 static int local_slot() { return g_players ? *(int32_t*)((uint8_t*)g_players - 0x18 + 8) : -1; }
 
 static void __fastcall slog_hook(const char* s) {
+    if (s && strstr(s, "loading content\\maps\\")) ++g_level_loads;
     if (s && strstr(s, "loader_finish: mapstate_running")) ++g_level_starts, g_body_ids.reset();  // new level: old body gone
     if (s && g_save_since && strstr(s, "total : gamesave")) save_restore_flag("serialized");
     if (s && !g_wait_hit) {
@@ -928,6 +933,7 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     LOG_INFO(out);
                     continue;
                 }
+                if (c.rfind("@act ", 0) == 0) { act_run_local(c.substr(5)); continue; }  // host's script action, forwarded
                 if (c.rfind("@poke ", 0) == 0) {
                     // diagnostics: "@poke <id hex|ctl> <offset hex> <size 0|1|2|4> <value hex>": write an entity field
                     // (size 0 = write nothing), then log the entity's position (+0xF0)
@@ -1138,6 +1144,7 @@ static spp_t g_spp_orig = nullptr;
 static std::atomic<uint32_t> g_auto_spawn_s{0};
 void engine_set_auto_spawn(uint32_t delay_s) { g_auto_spawn_s = delay_s; }
 void engine_tick() {
+    if (engine_client_in_session()) act_pending_run();
     install_save_hook();  // once the save manager exists (both host and client write checkpoints)
     if (g_save_since && GetTickCount64() - g_save_since > 15000) save_restore_flag("timeout");
     // shortcut: one pending spawn at a time; a second peer joining within the delay replaces the first one's
@@ -1414,11 +1421,14 @@ static std::atomic<uint64_t> g_sends{0};
 // Packet = kMsgMagic (4 bytes) + u8 type + payload. Reliable. Peers = the ones the engine itself sends to.
 // shortcut: no message before the engine's first send to a peer; fine, the engine sends every net frame.
 static const uint8_t kMsgMagic[4] = {0xFE, 'M', 'C', '1'};
-enum : uint8_t { MSG_PING = 1, MSG_PONG = 2 };
+enum : uint8_t { MSG_PING = 1, MSG_PONG = 2, MSG_ACT = 3 };
 static std::mutex g_msg_mtx;
 static std::vector<std::vector<uint8_t>> g_msg_out;  // queued by engine_msg_send, sent from peer_send_hook
 static void* g_msg_peers[4] = {};                    // only touched on the net thread (send/service hooks)
 static std::atomic<uint64_t> g_msg_tx{0}, g_msg_rx{0};
+static std::vector<std::vector<uint8_t>> g_act_log;  // host: forwarded script actions since the level load (g_msg_mtx)
+static void* g_replay_peer = nullptr;                // net thread: new peer that still needs g_act_log
+static std::vector<std::string> g_act_pending;       // client: received "@act ..." commands not run yet (g_msg_mtx)
 // ENet allocator callbacks the engine's ENet uses (enet_malloc/enet_free, set at RVA 0xFE6D20/0xFE6D28).
 // shortcut: fixed RVAs of this exe build, like g_level; upgrade to a pattern if another build must work.
 using enet_malloc_t = void*(__cdecl*)(size_t);
@@ -1473,6 +1483,12 @@ static void msg_handle(void* peer, const uint8_t* p, size_t len) {
         engine_msg_send(MSG_PONG, &seq, 4);  // sent from the engine's send path, see msg_flush
     } else if (type == MSG_PONG && n >= 4) {
         if (logged++ < 20) LOG_INFO("coopmsg pong seq=" + std::to_string(*(const uint32_t*)body));
+    } else if (type == MSG_ACT && n >= 4) {  // {u8 on; u16 ordinal; name}; only the host sends these
+        // A replay arrives at connect, before our level is loaded: engine_tick runs them once we are in session.
+        std::lock_guard<std::mutex> lk(g_msg_mtx);
+        if (g_act_pending.size() < 1024)
+            g_act_pending.push_back("@act " + std::to_string(body[0]) + " " + std::to_string(*(const uint16_t*)(body + 1)) +
+                                    " " + std::string((const char*)body + 3, n - 3));
     } else if (logged++ < 20) {
         LOG_INFO("coopmsg unknown type=" + std::to_string(type) + " len=" + std::to_string(len));
     }
@@ -1483,6 +1499,13 @@ static void msg_handle(void* peer, const uint8_t* p, size_t len) {
 static void msg_flush() {
     std::vector<std::vector<uint8_t>> out;
     { std::lock_guard<std::mutex> lk(g_msg_mtx); out.swap(g_msg_out); }
+    if (g_replay_peer) {  // a client joined: replay this level's player actions to it first, in order
+        std::vector<std::vector<uint8_t>> log;
+        { std::lock_guard<std::mutex> lk(g_msg_mtx); log = g_act_log; }
+        for (auto& m : log) msg_send_raw(g_replay_peer, m);
+        if (!log.empty()) LOG_INFO("coopmsg replayed " + std::to_string(log.size()) + " actions to a new peer");
+        g_replay_peer = nullptr;
+    }
     for (auto& m : out) msg_send_all(m);
     static uint64_t next_ping = 0;
     static uint32_t seq = 0;
@@ -1528,7 +1551,7 @@ static int __fastcall peer_send_hook(void* peer, uint8_t ch, uint8_t* pkt) {
     ++g_sends;
     bool known = false;
     for (void* p : g_msg_peers) known |= p == peer;
-    for (void*& p : g_msg_peers) if (!known && !p) { p = peer; known = true; }
+    for (void*& p : g_msg_peers) if (!known && !p) { p = peer; known = true; g_replay_peer = peer; }
     size_t len = pkt ? *(size_t*)(pkt + 24) : 0;
     uint8_t first = (len && *(uint8_t**)(pkt + 16)) ? **(uint8_t**)(pkt + 16) : 0;
     if (len > 4096 || g_sends_logged++ < 60)
@@ -1692,7 +1715,152 @@ void engine_watch_write(uintptr_t addr) {
 
 static void engine_watch_net_time() { if (g_net_time) engine_watch_write((uintptr_t)g_net_time); }
 
+// Diagnostics (hybrid netcode step 3, FINDINGS 5.12): log every script action block as it activates/deactivates.
+// RVA 0x752D50(owner, stream, version) creates every script block: it reads a u32 clsid from the stream, finds the
+// factory in the sorted registry (RVA 0x6C8BF0: {u32 clsid; pad; factory*} x count u16 @+10), calls factory->vtbl[0]
+// (create), then obj->vtbl[0x20](owner) and (obj+8)->vtbl[0x20](stream, version) (load parameters).
+// Factory: +8 clsid, +0x10 interned name string (e.g. "actions/player/hide subj"). For "actions/" blocks we patch
+// vtable slots +0x170 (activate; RVA 0x6D040 for actor actions, which runs vtbl+0x198 on each target) and +0x178
+// (deactivate; RVA 0x6D090, vtbl+0x1A0 on each target) with one detour that logs the block name.
+// shortcut: fixed RVAs, a log cap, names found by a heuristic scan of the name object; this is a probe.
+using block_create_t = uint8_t*(__fastcall*)(void*, uint8_t**, uint16_t);
+static block_create_t g_block_create_orig = nullptr;
+using act_slot_t = uint64_t(__fastcall*)(uint8_t*, uint64_t, uint64_t, uint64_t);
+static std::mutex g_act_mtx;
+struct ActInfo { std::string name; uint16_t ord; };
+static std::unordered_map<uint8_t*, ActInfo> g_act_name;               // block object -> registered name, ordinal
+static std::unordered_map<std::string, uint8_t*> g_act_key;            // "name#ordinal" -> block object (this level)
+static std::unordered_map<std::string, uint16_t> g_act_count;          // name -> blocks created so far (this level)
+static int g_act_level = -1;                                           // g_level_loads when they were made
+static std::unordered_map<uintptr_t, act_slot_t> g_act_orig;           // &vtable slot -> original function
+static std::atomic<int> g_act_logged{0};
+
+static std::string interned_text(uint8_t* o) {  // first printable C string of >= 4 chars in the name object
+    if (!o) return {};
+    for (int off = 0; off < 0x40; ++off) {
+        const char* c = (const char*)o + off;
+        int n = 0;
+        while (n < 120 && c[n] >= 0x20 && c[n] < 0x7F) ++n;
+        if (n >= 4 && c[n] == 0) return std::string(c, n);
+    }
+    return {};
+}
+
+static uint64_t act_slot_call(int slot, uint8_t* a, uint64_t x, uint64_t y, uint64_t z) {
+    act_slot_t orig = nullptr;
+    std::string name;
+    uint16_t ord = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_act_mtx);
+        auto it = g_act_orig.find((uintptr_t)*(void**)a + slot);
+        if (it != g_act_orig.end()) orig = it->second;
+        auto n = g_act_name.find(a);
+        if (n != g_act_name.end()) { name = n->second.name; ord = n->second.ord; }
+    }
+    // Host (or single player): forward actions on the player to clients, and keep them for a late joiner's replay.
+    // Blocks are matched by name + creation ordinal: both sides load the same level script in the same order.
+    if (local_slot() < 1 && name.rfind("actions/player/", 0) == 0) {
+        std::vector<uint8_t> body{(uint8_t)(slot == 0x170), (uint8_t)ord, (uint8_t)(ord >> 8)};
+        body.insert(body.end(), name.begin(), name.end());
+        { std::lock_guard<std::mutex> lk(g_msg_mtx); if (g_act_log.size() < 512) g_act_log.push_back(msg_make(MSG_ACT, body.data(), body.size())); }
+        engine_msg_send(MSG_ACT, body.data(), body.size());
+    }
+    if (g_act_logged++ < 5000) {
+        char b[200];
+        snprintf(b, sizeof(b), "act %s '%s'#%u a=%p vt=%llX", slot == 0x170 ? "on" : "off", name.c_str(), ord, a,
+                 (unsigned long long)((uintptr_t)*(void**)a - (uintptr_t)GetModuleHandleA(nullptr)));
+        LOG_INFO(b);
+    }
+    return orig ? orig(a, x, y, z) : 0;
+}
+static uint64_t __fastcall act_on_detour(uint8_t* a, uint64_t x, uint64_t y, uint64_t z) { return act_slot_call(0x170, a, x, y, z); }
+static uint64_t __fastcall act_off_detour(uint8_t* a, uint64_t x, uint64_t y, uint64_t z) { return act_slot_call(0x178, a, x, y, z); }
+
+static void act_patch_slot(uint8_t* vt, int slot, void* detour) {  // caller holds g_act_mtx
+    auto** p = (void**)(vt + slot);
+    if (*p == detour || g_act_orig.count((uintptr_t)p)) return;
+    DWORD old;
+    if (!VirtualProtect(p, 8, PAGE_READWRITE, &old)) return;
+    g_act_orig[(uintptr_t)p] = (act_slot_t)*p;
+    *p = detour;
+    VirtualProtect(p, 8, old, &old);
+}
+
+static uint8_t* __fastcall block_create_hook(void* owner, uint8_t** stream, uint16_t ver) {
+    uint32_t clsid = 0xFFFFFFFF;  // peek like RVA 0x752D50 does for version >= 0xE (raw u32 at the read position)
+    if (ver > 0xD && stream && *stream) clsid = *(uint32_t*)(*(uint8_t**)(*stream + 0x38) + *(int32_t*)(*stream + 0x40));
+    uint8_t* obj = g_block_create_orig(owner, stream, ver);
+    if (!obj || clsid == 0xFFFFFFFF) return obj;
+    auto* reg = ((uint8_t*(__fastcall*)())((uint8_t*)GetModuleHandleA(nullptr) + 0x6C8BF0))();
+    uint8_t* e = *(uint8_t**)reg;
+    uint16_t n = *(uint16_t*)(reg + 10);
+    uint8_t* fac = nullptr;
+    for (uint16_t i = 0; i < n && !fac; ++i) if (*(uint32_t*)(e + i * 16) == clsid) fac = *(uint8_t**)(e + i * 16 + 8);
+    std::string name = fac ? interned_text(*(uint8_t**)(fac + 0x10)) : std::string();
+    static int logged = 0;
+    if (logged < 3 && fac) {  // probe check: show the raw name object once
+        ++logged;
+        char b[200];
+        uint8_t* no = *(uint8_t**)(fac + 0x10);
+        snprintf(b, sizeof(b), "block clsid=%X name='%s' nameobj=%016llX %016llX %016llX %016llX", clsid, name.c_str(),
+                 no ? *(unsigned long long*)no : 0, no ? *(unsigned long long*)(no + 8) : 0,
+                 no ? *(unsigned long long*)(no + 16) : 0, no ? *(unsigned long long*)(no + 24) : 0);
+        LOG_INFO(b);
+    }
+    if (name.rfind("actions/", 0) != 0) return obj;
+    std::lock_guard<std::mutex> lk(g_act_mtx);
+    if (g_level_loads != g_act_level) {  // first block of a new level load: forget the old level's blocks
+        g_act_level = g_level_loads;
+        g_act_name.clear(); g_act_key.clear(); g_act_count.clear();
+        std::lock_guard<std::mutex> lk2(g_msg_mtx);
+        g_act_log.clear();
+    }
+    uint16_t ord = g_act_count[name]++;
+    g_act_name[obj] = {name, ord};
+    g_act_key[name + "#" + std::to_string(ord)] = obj;
+    // Patch a slot only if it is inside the primary vtable, which ends where the +8 interface's vtable starts (e.g.
+    // actions/engine/signal[S], vtable RVA 0xE333B0, is 0x178 long: its +0x178 is the +8 interface's destructor).
+    uint8_t* vt = *(uint8_t**)obj;
+    ptrdiff_t len = *(uint8_t**)(obj + 8) - vt;
+    if (len > 0x400) len = 0;  // +8 vtable not adjacent: length unknown, don't patch
+    if (len >= 0x178) act_patch_slot(vt, 0x170, (void*)&act_on_detour);
+    if (len >= 0x180) act_patch_slot(vt, 0x178, (void*)&act_off_detour);
+    return obj;
+}
+
+// Client: queue the host's forwarded script actions on the game thread (exec queue).
+static void act_pending_run() {
+    std::vector<std::string> acts;
+    { std::lock_guard<std::mutex> lk(g_msg_mtx); acts.swap(g_act_pending); }
+    for (auto& a : acts) engine_exec(a);
+}
+
+// Client, game thread: run the host's forwarded action on our block with the same name and ordinal.
+// shortcut: a block destroyed mid-level leaves a stale pointer in g_act_key; the vtable check below catches most
+// cases. Upgrade: drop entries in the blocks' destructor.
+static void act_run_local(const std::string& args) {
+    int on = 0, ord = 0, used = 0;
+    if (sscanf_s(args.c_str(), "%d %d %n", &on, &ord, &used) < 2 || !used) return;
+    std::string name = args.substr(used);
+    uint8_t* obj = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_act_mtx);
+        auto it = g_act_key.find(name + "#" + std::to_string(ord));
+        if (it != g_act_key.end() && g_act_name.count(it->second) && g_act_name[it->second].name == name) obj = it->second;
+    }
+    static int logged = 0;
+    if (logged++ < 200) LOG_INFO("act forwarded " + std::string(on ? "on " : "off ") + name + "#" + std::to_string(ord) + (obj ? "" : " (no such block here)"));
+    if (!obj) return;
+    int slot = on ? 0x170 : 0x178;
+    ptrdiff_t len = *(uint8_t**)(obj + 8) - *(uint8_t**)obj;  // slot must be inside the primary vtable (see above)
+    if (len < slot + 8 || len > 0x400) return;
+    uint64_t out = 0;
+    ((act_slot_t)(*(void***)obj)[slot / 8])(obj, on ? (uint64_t)&out : 0, 0, 0);
+}
+
 static void install_netframe_counter() {
+    auto* exe = (uint8_t*)GetModuleHandleA(nullptr);
+    if (MH_CreateHook(exe + 0x752D50, (LPVOID)&block_create_hook, (LPVOID*)&g_block_create_orig) == MH_OK) MH_EnableHook(exe + 0x752D50);
     if (auto sj = find("40 55 56 41 54 41 55 41 56 48 8D 6C 24 C9 48 81 EC D0 00 00 00 4C 8D B1 88 01 00 00 4C"))
         if (MH_CreateHook((LPVOID)*sj, (LPVOID)&send_job_hook, (LPVOID*)&g_send_job_orig) == MH_OK) {
             MH_EnableHook((LPVOID)*sj);

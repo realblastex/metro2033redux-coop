@@ -703,6 +703,40 @@ what it does not sync (script effects on `player`, vehicles, doors, cutscene wai
 - Test note: Windows Defender quarantines/blocks `injector.exe` (detections 2026-11-13 and 2026-11-14), so the
   default smoke test can't inject; `-Launcher` works.
 
+Script actions (steps 2-4 of the hybrid plan, session 13):
+- Derived (decompile): RVA 0x752D50(owner, stream, version) creates every script block. It reads a u32 clsid (raw at
+  the stream position for version >= 0xE), binary-searches the registry (RVA 0x6C8BF0 returns {entries*, ..., u16
+  count @+10}, entries {u32 clsid; pad; factory*}), calls factory->vtbl[0] (create), then obj->vtbl[0x20](owner) and
+  (obj+8)->vtbl[0x20](stream, version) (load parameters, e.g. `speed_factor_walk` for movement, RVA 0x48A244).
+  Factory: +8 clsid, +0x10 interned name (chars at +0x14), e.g. `actions/player/hide subj`.
+- Derived: block objects have two vtables (+0 primary, +8 interface). For action blocks, primary slot +0x170 =
+  activate, +0x178 = deactivate. The actor-action base class (vtable RVA 0xB9EAD8) implements them as RVA 0x6D040 /
+  0x6D090: run vtbl+0x198 / +0x1A0 on every target in the list at +0x68 (movement: RVA 0x3EF4C4 / 0x3EF500(action,
+  target)). Simpler actions override +0x170 themselves (`hands hide` RVA 0x3F250C, `hide/show subj` share class
+  vtable RVA 0xBA6FF0 with +0x170 = RVA 0x3F265C, `civil mode` RVA 0x3F3110/0x3F323C).
+- Verified (crash, then fix): some primary vtables are shorter. `actions/engine/signal[S]` (vtable RVA 0xE333B0) is
+  0x178 long, so its +0x178 is the +8 interface's destructor (thunk RVA 0x6EE8C -> 0x6DE60). Patching it crashed the
+  host at RVA 0x6DE92. Rule: patch a slot only when it lies before the +8 vtable (`*(obj+8) - *obj`).
+- Probe in the DLL: hook 0x752D50, name each new block, patch +0x170/+0x178 of every `actions/*` class with one
+  logging detour. Log line: `act on|off '<name>'#<ordinal>`. Ordinal = creation order of blocks with that name since
+  the last `loading content\maps\...` engine log line (the level load start).
+- Verified (l04 test, `re_tools/l04_launch.ps1`, host via coop_ch3 -> change_map l04):
+  host at load: `player/movement` on #4, off #9, on #9, `player/doctor`, gasmask actions, `player/lock camera` on.
+  During the bar act: `player/lock camera` on, alternating blocks #0/#3, about every 18 s.
+  At the act end (~75 s after load): `player/lock camera` off #2, `player/movement` on #5, `player/map text` on #0..#3.
+  The client's own level script runs almost nothing (2x `lock camera` on) - it never sees the act end.
+- Built and verified as transport: the host forwards every `actions/player/*` on/off as message type 3 {u8 on; u16
+  ordinal; name}, and keeps them in a per-level log. A peer that connects gets the log replayed first. The client
+  buffers them until it is in session, then runs the block with the same name and ordinal through its vtable slot
+  (`act forwarded ...` in the client log). Verified: after a rejoin into l04 the client ran all 23 replayed actions;
+  every name+ordinal existed on the client. Smoke `-Launcher` PASS 8, `-Launcher -Save coop_l19 -Respawn` PASS 10.
+- Verified: this does NOT unlock the Riga client yet. After `movement on #5` / `lock camera off #2` the client's
+  pad walk moved its body 0.1 m (ctl=BD00, 51.3 -> 51.4). The client still holds a drawn rifle in the bar.
+  Derived guess: the client's action blocks target the client level's `player`, which is not the client's
+  controlled body. Next check: log the target list (+0x68) of the client's `movement` block vs ctl, or run the
+  movement execute (RVA 0x3EF4C4/0x3EF500) on ctl directly.
+- Unknown: why the replay shows the lock-camera/movement sequence twice (both copies arrived in one batch).
+
 ## 6. Corrections to early analysis
 - The Steam `metro.exe` is SteamStub-protected (`.text` entropy 8.0). Early "97.8 % encrypted code" conclusions came
   from disassembling encrypted bytes. The unpacked exe analyses normally.
