@@ -732,9 +732,14 @@ Script actions (steps 2-4 of the hybrid plan, session 13):
   every name+ordinal existed on the client. Smoke `-Launcher` PASS 8, `-Launcher -Save coop_l19 -Respawn` PASS 10.
 - Verified: this does NOT unlock the Riga client yet. After `movement on #5` / `lock camera off #2` the client's
   pad walk moved its body 0.1 m (ctl=BD00, 51.3 -> 51.4). The client still holds a drawn rifle in the bar.
-  Derived guess: the client's action blocks target the client level's `player`, which is not the client's
-  controlled body. Next check: log the target list (+0x68) of the client's `movement` block vs ctl, or run the
-  movement execute (RVA 0x3EF4C4/0x3EF500) on ctl directly.
+- Verified (probe hooks on RVA 0x3EF4C4 / 0x3EF500, target arg -> ref -> entity+0xA0 like RVA 0x4D7B0): the
+  host's movement blocks reach its own body (F107 = ctl); the client's forwarded movement block reaches the
+  client's own body (BD00 = ctl). So the old guess (wrong target) is false, and the Riga lock is not the movement
+  speed factors. Other host-side blocks on the player that are not `actions/player/*`: `actions/entity/move[M]`
+  (3 on), `actions/entity/death protection`, `actions/human/property`, `actions/npc[Q]/anim state` and many
+  unnamed blocks (classes shared with non-action blocks). Not forwarded yet. Leads: forward `actions/entity/*` and
+  `actions/human/*` aimed at the player too; or compare the client body's state fields with a free body again,
+  now with these block names as hints (session 12 ride_follow/`dummy_bar_act` note).
 - Unknown: why the replay shows the lock-camera/movement sequence twice (both copies arrived in one batch).
 
 ## 6. Corrections to early analysis

@@ -1858,8 +1858,29 @@ static void act_run_local(const std::string& args) {
     ((act_slot_t)(*(void***)obj)[slot / 8])(obj, on ? (uint64_t)&out : 0, 0, 0);
 }
 
+// Diagnostics: movement action's per-target apply/restore (RVA 0x3EF4C4 / 0x3EF500(action, target)): which entity
+// does a client's forwarded `actions/player/movement` reach? (FINDINGS 5.12)
+static act_slot_t g_mv_on_orig = nullptr, g_mv_off_orig = nullptr;
+static void mv_log(const char* what, uint8_t* a, uint8_t* t) {
+    static int logged = 0;
+    if (logged++ >= 100) return;
+    char b[160];
+    uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);
+    uint8_t* ctl = lvl ? *(uint8_t**)(lvl + 0x38) : nullptr;
+    // target arg -> ref -> entity+0xA0 (like RVA 0x4D7B0, which then casts with entity vtbl+0x6E0)
+    uint8_t* r = t ? *(uint8_t**)t : nullptr;
+    uint8_t* e = r && *(uint8_t**)r ? *(uint8_t**)r - 0xA0 : nullptr;
+    snprintf(b, sizeof(b), "movement %s a=%p target=%p entity=%p id=%X ctl=%p id=%X", what, a, t, e,
+             e ? *(uint16_t*)(e + 0x108) : 0xFFFF, ctl, ctl ? *(uint16_t*)(ctl + 0x108) : 0xFFFF);
+    LOG_INFO(b);
+}
+static uint64_t __fastcall mv_on_hook(uint8_t* a, uint64_t t, uint64_t y, uint64_t z) { mv_log("apply", a, (uint8_t*)t); return g_mv_on_orig(a, t, y, z); }
+static uint64_t __fastcall mv_off_hook(uint8_t* a, uint64_t t, uint64_t y, uint64_t z) { mv_log("restore", a, (uint8_t*)t); return g_mv_off_orig(a, t, y, z); }
+
 static void install_netframe_counter() {
     auto* exe = (uint8_t*)GetModuleHandleA(nullptr);
+    if (MH_CreateHook(exe + 0x3EF4C4, (LPVOID)&mv_on_hook, (LPVOID*)&g_mv_on_orig) == MH_OK) MH_EnableHook(exe + 0x3EF4C4);
+    if (MH_CreateHook(exe + 0x3EF500, (LPVOID)&mv_off_hook, (LPVOID*)&g_mv_off_orig) == MH_OK) MH_EnableHook(exe + 0x3EF500);
     if (MH_CreateHook(exe + 0x752D50, (LPVOID)&block_create_hook, (LPVOID*)&g_block_create_orig) == MH_OK) MH_EnableHook(exe + 0x752D50);
     if (auto sj = find("40 55 56 41 54 41 55 41 56 48 8D 6C 24 C9 48 81 EC D0 00 00 00 4C 8D B1 88 01 00 00 4C"))
         if (MH_CreateHook((LPVOID)*sj, (LPVOID)&send_job_hook, (LPVOID*)&g_send_job_orig) == MH_OK) {
