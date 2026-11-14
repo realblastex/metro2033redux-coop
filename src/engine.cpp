@@ -44,6 +44,11 @@ static std::atomic<bool> g_spawn_force{false};  // respawn: spawn even though th
 // So hosting = "@mp 1" then "server" (no arg).
 static uint8_t* g_mp_flag = nullptr;
 static std::atomic<bool> g_host_gone{false};  // client: the host left (ENet disconnect) or changed the level
+// Client: the host changed the level (change_map_cl). Until the host says its new level is ready (MSG_LEVEL), the
+// ENet link stays up for our channel but engine packets are dropped both ways, so neither side applies the other
+// level's state. Then dllmain runs "disconnect; @join" in this process (FINDINGS 5.13).
+static std::atomic<bool> g_level_follow{false};
+static std::atomic<bool> g_level_ready{false};
 // net_core global (RVA 0xFD5020): +0 ENetHost* host (1 = local-only marker), +8 local player index, +0x18 players.
 struct PlayersVec { void* array; uint16_t capacity; uint16_t size; };
 static PlayersVec* g_players = nullptr;
@@ -112,17 +117,22 @@ static void install_save_skip(uint8_t* exe) {
 // "change_map_cl <level>". A client that follows loads the level itself and crashed applying the level's
 // .player data (AV RVA 0x3CA468, FINDINGS 5.11). So a client in a session skips it and counts the host as gone:
 // dllmain restarts it and it joins the host's new level like after a host death.
+// Session 13: instead it follows in this process (g_level_follow above); the restart is the fallback.
 static int local_slot();
 static void act_run_local(const std::string& args);  // "@act <0|1> <ordinal> <name>"
 static void act_pending_run();
+static void msg_forget_peers();
 using change_map_t = void(__fastcall*)(const char*);
 static change_map_t g_change_map_orig = nullptr;
 static void __fastcall change_map_hook(const char* level) {
     // a second call follows after the net state was reset (verified), so once rejoining, block every one
-    static bool rejoining = false;
-    if (rejoining || (g_mp_flag && *g_mp_flag && local_slot() >= 1)) {
-        LOG_INFO(std::string("engine: host changes level to ") + (level ? level : "?") + ", rejoining");
-        rejoining = g_host_gone = true;
+    // The MP flag is already 0 here (the client's level-change code clears it, expecting the worker to load the
+    // level). The net frame (RVA 0x6BB150) only runs while it is set, so put it back: our channel must keep running.
+    if (g_level_follow || (g_mp_flag && local_slot() >= 1 && g_players && g_players->size >= 2)) {
+        LOG_INFO(std::string("engine: host changes level to ") + (level ? level : "?") + ", following (mp was " +
+                 std::to_string(g_mp_flag ? *g_mp_flag : -1) + ")");
+        g_level_follow = true;
+        if (g_mp_flag) *g_mp_flag = 1;
         return;
     }
     LOG_INFO(std::string("engine: change level to ") + (level ? level : "?"));
@@ -626,6 +636,17 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         LOG_INFO("engine: players " + std::to_string(g_players->size) + " -> " + c.substr(9));
                         g_resize(g_players, (uint32_t)atoi(c.c_str() + 9));
                     }
+                    continue;
+                }
+                if (c == "@level_ready") {  // host, after re-hosting a new level: tell clients to rejoin now
+                    engine_msg_send(4 /* MSG_LEVEL */, "", 0);
+                    LOG_INFO("engine: level ready sent");
+                    continue;
+                }
+                if (c == "@follow_done") {  // client, right after its "disconnect": engine traffic flows again
+                    g_level_follow = false;
+                    g_host_gone = false;  // our own disconnect may have looked like the host leaving
+                    msg_forget_peers();
                     continue;
                 }
                 if (c == "@net_host") {
@@ -1421,11 +1442,12 @@ static std::atomic<uint64_t> g_sends{0};
 // Packet = kMsgMagic (4 bytes) + u8 type + payload. Reliable. Peers = the ones the engine itself sends to.
 // shortcut: no message before the engine's first send to a peer; fine, the engine sends every net frame.
 static const uint8_t kMsgMagic[4] = {0xFE, 'M', 'C', '1'};
-enum : uint8_t { MSG_PING = 1, MSG_PONG = 2, MSG_ACT = 3 };
+enum : uint8_t { MSG_PING = 1, MSG_PONG = 2, MSG_ACT = 3, MSG_LEVEL = 4 };
 static std::mutex g_msg_mtx;
 static std::vector<std::vector<uint8_t>> g_msg_out;  // queued by engine_msg_send, sent from peer_send_hook
 static void* g_msg_peers[4] = {};                    // only touched on the net thread (send/service hooks)
 static std::atomic<uint64_t> g_msg_tx{0}, g_msg_rx{0};
+static std::atomic<uint64_t> g_engine_send_ms{0};  // last engine enet_peer_send (GetTickCount64)
 static std::vector<std::vector<uint8_t>> g_act_log;  // host: forwarded script actions since the level load (g_msg_mtx)
 static void* g_replay_peer = nullptr;                // net thread: new peer that still needs g_act_log
 static std::vector<std::string> g_act_pending;       // client: received "@act ..." commands not run yet (g_msg_mtx)
@@ -1460,9 +1482,19 @@ static bool msg_send_raw(void* peer, const std::vector<uint8_t>& m) {
     return true;
 }
 
-static void msg_send_all(const std::vector<uint8_t>& m) {
-    for (void* p : g_msg_peers) if (p) msg_send_raw(p, m);
+// ENetPeer { ENetListNode dispatchList; ENetHost* host; ... }: a peer of an ENet host that was destroyed (local
+// "disconnect") must not be used. net_core+0 = the current ENetHost*.
+static bool msg_peer_live(void* p) {
+    void* host = g_players ? *(void**)((uint8_t*)g_players - 0x18) : nullptr;
+    return p && host && (uintptr_t)host != 1 && *(void**)((uint8_t*)p + 16) == host;
 }
+static void msg_send_all(const std::vector<uint8_t>& m) {
+    for (void*& p : g_msg_peers) {
+        if (p && !msg_peer_live(p)) { LOG_INFO("coopmsg: dropping a peer of an old ENet host"); p = nullptr; }
+        if (p) msg_send_raw(p, m);
+    }
+}
+static void msg_forget_peers() { for (void*& p : g_msg_peers) p = nullptr; }
 
 static std::vector<uint8_t> msg_make(uint8_t type, const void* data, size_t len) {
     std::vector<uint8_t> m(kMsgMagic, kMsgMagic + 4);
@@ -1483,6 +1515,11 @@ static void msg_handle(void* peer, const uint8_t* p, size_t len) {
         engine_msg_send(MSG_PONG, &seq, 4);  // sent from the engine's send path, see msg_flush
     } else if (type == MSG_PONG && n >= 4) {
         if (logged++ < 20) LOG_INFO("coopmsg pong seq=" + std::to_string(*(const uint32_t*)body));
+    } else if (type == MSG_LEVEL) {  // host: its new level is up and hosted
+        LOG_INFO(std::string("coopmsg level ready") + (g_level_follow ? "" : " (not following, ignored)"));
+        if (g_level_follow) g_level_ready = true;
+    } else if (type == MSG_ACT && n >= 4 && g_level_follow) {
+        // following a level change: these belong to the host's new level; the rejoin replays them
     } else if (type == MSG_ACT && n >= 4) {  // {u8 on; u16 ordinal; name}; only the host sends these
         // A replay arrives at connect, before our level is loaded: engine_tick runs them once we are in session.
         std::lock_guard<std::mutex> lk(g_msg_mtx);
@@ -1522,6 +1559,9 @@ bool engine_msg_send(uint8_t type, const void* data, size_t len) {
 
 static int __fastcall service_hook(void* host, uint8_t* ev, uint32_t timeout) {
     ++g_service_calls;
+    // The engine stops sending to a peer it has no player slot for (host after re-hosting a level: "players 2 -> 1"),
+    // and then nothing would carry our messages. Flush here too, but only while the engine's send path is idle.
+    if (GetTickCount64() - g_engine_send_ms > 200) msg_flush();
     for (;;) {
         int r = g_service_orig(host, ev, timeout);
         if (r <= 0 || !ev) return r;
@@ -1539,6 +1579,7 @@ static int __fastcall service_hook(void* host, uint8_t* ev, uint32_t timeout) {
             msg_packet_destroy(pkt);
             continue;
         }
+        if (type == 3 && g_level_follow) { msg_packet_destroy(pkt); continue; }  // host's next level: not for us
         uint8_t first = data ? *data : 0;
         if (type != 3 || len > 4096 || g_events_logged++ < 150)
             LOG_INFO("enet event type=" + std::to_string(type) + " ch=" + std::to_string(ev[16]) +
@@ -1556,7 +1597,10 @@ static int __fastcall peer_send_hook(void* peer, uint8_t ch, uint8_t* pkt) {
     uint8_t first = (len && *(uint8_t**)(pkt + 16)) ? **(uint8_t**)(pkt + 16) : 0;
     if (len > 4096 || g_sends_logged++ < 60)
         LOG_INFO("enet send ch=" + std::to_string(ch) + " len=" + std::to_string(len) + " msg=" + std::to_string(first));
-    int r = g_peer_send_orig(peer, ch, pkt);
+    g_engine_send_ms = GetTickCount64();
+    int r = 0;
+    if (g_level_follow && local_slot() >= 1) msg_packet_destroy(pkt);  // our old level's state: keep it from the host
+    else r = g_peer_send_orig(peer, ch, pkt);
     msg_flush();
     return r;
 }
@@ -1962,6 +2006,8 @@ bool engine_client_in_session() {
     return !g_host_gone && g_mp_flag && (*g_mp_flag || g_save_since) && local_slot() >= 1 && g_players->size >= 2 && controlled();
 }
 bool engine_checkpoint_saved() { return g_checkpoint_saved; }
+bool engine_level_following() { return g_level_follow; }
+bool engine_level_ready() { return g_level_ready.exchange(false); }
 bool engine_hosting() {  // net_core.host is a real ENet host (1 = local-only marker) and we are slot 0
     return g_players && *(uintptr_t*)((uint8_t*)g_players - 0x18) > 1 && local_slot() == 0;
 }

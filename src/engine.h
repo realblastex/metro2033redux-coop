@@ -37,6 +37,10 @@ bool engine_host_dead();
 bool engine_client_in_session();
 // A checkpoint (auto_save) was written while networked; such saves are written loadable (MP flag cleared).
 bool engine_checkpoint_saved();
+// Client: the host changed the level and we wait for it (engine traffic paused, process kept).
+bool engine_level_following();
+// Client: the host's new level is ready (consumes the signal). dllmain then runs "disconnect;@follow_done;@join".
+bool engine_level_ready();
 // This game runs the network server (it hosted; the ENet host survives story level changes).
 bool engine_hosting();
 

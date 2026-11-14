@@ -742,6 +742,29 @@ Script actions (steps 2-4 of the hybrid plan, session 13):
   now with these block names as hints (session 12 ride_follow/`dummy_bar_act` note).
 - Unknown: why the replay shows the lock-camera/movement sequence twice (both copies arrived in one batch).
 
+### 5.13 Client level change without a restart (session 13, branch `level-follow`, unfinished)
+
+Goal: when the host runs `change_map`, the client follows in its own process instead of restarting the game.
+- Verified (disassembly): `change_map_cl` (handler RVA 0x54230) jumps straight to the worker RVA 0x540C0. The
+  client gets it from the net state machine RVA 0x6B2FC0 (two call sites, so it runs twice), which then calls RVA
+  0x69E4C0 (finish_load: logs `loader_finish: mapstate_running`, sends msg 0xC to the host).
+- Verified (engine log, client allowed to run the worker once): `disconnect 1` unloads the level, `server 1` shows
+  nothing, `map 2033\l04_riga` loads l04 locally in about 2 s with no network and no player (`!G
+  action_way_point: player is absent`). The MP flag is 0 and enet_host_service is no longer called. So the
+  engine's own client path does not rejoin the host: dead end.
+- Verified: on the client the MP flag is already 0 when the worker hook runs. The net frame RVA 0x6BB150 is gated
+  on it, so the client's net (and our channel) stop; the host's messages no longer arrive.
+- Verified: after re-hosting the new level the host trims slots (`players 2 -> 1`) and then the engine stops
+  sending to the client. Our messages went out only from inside peer_send_hook, so nothing was sent. Fixed on the
+  branch: service_hook also flushes our queue when the engine has not sent for 200 ms.
+- Design on the branch (not verified end to end yet): client skips the worker, sets `g_level_follow`, puts the MP
+  flag back, drops engine packets both ways (our channel keeps running). Host: after the re-`@host`, dllmain runs
+  `@level_ready` (message type 4). Client: on it, dllmain runs `disconnect;@follow_done;@wait 3;@join <address>`
+  in the same process; no session within 90 s, or no "ready" within 4 min, falls back to the old restart.
+  `msg_peer_live` drops peers of a destroyed ENet host (ENetPeer+16 = its host).
+- Open: whether the restored MP flag keeps the client's net running; whether a second `connect` in the same
+  process loads the host's world (unknown; a host-side `gameload` after hosting crashes, 5.9).
+
 ## 6. Corrections to early analysis
 - The Steam `metro.exe` is SteamStub-protected (`.text` entropy 8.0). Early "97.8 % encrypted code" conclusions came
   from disassembling encrypted bytes. The unpacked exe analyses normally.

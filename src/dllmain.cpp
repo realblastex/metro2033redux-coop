@@ -249,7 +249,7 @@ static DWORD WINAPI main_thread(LPVOID) {
             else if (ls > hosted_level) {
                 hosted_level = ls;
                 LOG_INFO("new level while hosting: hosting again");
-                exec.push("@wait 2;@unpause_all;@host");
+                exec.push("@wait 2;@unpause_all;@host;@wait 2;@level_ready");  // clients follow on @level_ready
             }
         }
         // Client lost the host, or join mode got no session within 90 s (the host wasn't up yet): restart in join mode.
@@ -258,7 +258,25 @@ static DWORD WINAPI main_thread(LPVOID) {
         // restarts in a row without a session; inherited by the restarted game. Cap 3 (about 5 min) so a host that
         // quit for good doesn't keep the client restarting.
         static int retries = [] { char v[8] = {}; return GetEnvironmentVariableA("METRO_COOP_RETRY", v, 8) ? atoi(v) : 0; }();
-        if (engine_client_in_session()) in_session = true, lost_since = 0, retries = 0;
+        // Client: the host changed the level. Once it says the new level is hosted, rejoin in this process (the
+        // join loads the host's world). If no "ready" comes within 4 min, fall back to the restart below.
+        static uint64_t follow_since = 0;
+        if (engine_level_ready()) {
+            LOG_INFO("host's new level is ready: rejoining in this process");
+            exec.push("disconnect;@follow_done;@wait 3;@join " + cfg.join_address);
+            in_session = false;
+            join_at = now;  // no session within 90 s -> restart
+            follow_since = 0;
+        } else if (engine_level_following()) {
+            if (!follow_since) follow_since = now;
+            if (now - follow_since > 240000) {
+                LOG_INFO("host's new level never got ready: restarting");
+                follow_since = 0;
+                restart("--join " + cfg.join_address + (cfg.engine_bind_port ? " --second" : ""));
+            }
+        } else follow_since = 0;
+        if (engine_level_following()) lost_since = 0;  // waiting for the host's next level, handled above
+        else if (engine_client_in_session()) in_session = true, lost_since = 0, retries = 0;
         else if (retries < 3 && (in_session || (join_at && now - join_at > 90000))) {
             if (!lost_since) lost_since = now;
             if (now - lost_since > 5000) {
