@@ -540,6 +540,12 @@ Verified:
 - A linear capstone sweep found no 30.0f or 30000 constant in RVA 0x1D0000-0x200000, 0x29F000-0x2F0000,
   0x4E0000-0x500000, 0x520000-0x530000 or 0x6A0000-0x6C0000.
 
+- Derived (disassembly of the shared draw RVA 0x2A0260, tail 0x2A03CE-0x2A044E): the weapon is handed to the HUD
+  (weapon vtbl+0x1300, then a flag at +0x303 of the caller's object) only when its parent handle (weapon+0x118)
+  points at the controlled entity (`*(g_level+0x38)+0xA0`), a byte at `*(weapon+0x1B8)+0x11B2` is set and weapon
+  vtbl+0x1348 returns nonzero. Untested lead: one of these is false at the client's first try, and something
+  retries after 30 s.
+
 Next: hook the shared weapon draw RVA 0x2A0260 and the weapon's per-frame update on the client and compare with the
 AK's instant draw (what does the revolver wait 30 s for?); find a host-side revolver draw as a control (weapon
 wheel, or a pad sequence that selects slot 2); try the revolver as the clone's starting weapon (host holds it when
