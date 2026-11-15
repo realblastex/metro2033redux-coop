@@ -543,8 +543,14 @@ Verified:
 - Derived (disassembly of the shared draw RVA 0x2A0260, tail 0x2A03CE-0x2A044E): the weapon is handed to the HUD
   (weapon vtbl+0x1300, then a flag at +0x303 of the caller's object) only when its parent handle (weapon+0x118)
   points at the controlled entity (`*(g_level+0x38)+0xA0`), a byte at `*(weapon+0x1B8)+0x11B2` is set and weapon
-  vtbl+0x1348 returns nonzero. Untested lead: one of these is false at the client's first try, and something
-  retries after 30 s.
+  vtbl+0x1348 returns nonzero.
+- Verified (`@hook_item` now also hooks the weapon entity's vtbl+0x1348/+0x1300 and logs return values): at the
+  client's switch the revolver item's +0xD0 returns 1, but **neither +0x1348 nor +0x1300 is called on the revolver
+  entity** within 45 s, and nothing hooked fires at +30.9 s when the revolver shows. So the shared draw exits
+  before the HUD hand-over: entity vtbl+0xED0 returned nonzero, the parent handle was null, the byte at
+  `*(weapon+0x1B8)+0x11B2` was 0, or the parent was not the controlled entity. Not checked: whether these hooks
+  fire on the host for a working draw (control), and which of the four conditions fails. The late show at 30.9 s
+  takes some other path.
 
 Next: hook the shared weapon draw RVA 0x2A0260 and the weapon's per-frame update on the client and compare with the
 AK's instant draw (what does the revolver wait 30 s for?); find a host-side revolver draw as a control (weapon

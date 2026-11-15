@@ -534,30 +534,33 @@ static void ride_follow() {
 
 // Diagnostics (session 14, `@hook_item`): log an item's virtual calls, only for the registered items, capped.
 // Six-argument pass-through: extra stack slots are harmless when the original takes fewer.
-static uint8_t* g_probe_items[4] = {};
+static uint8_t* g_probe_items[8] = {};
 static int g_probe_items_n = 0;
-static const int k_item_probe_offs[6] = {0xD0, 0xD8, 0xE8, 0x178, 0x180, 0x240};
+// item interface slots 0-5; weapon entity slots 6-7 (HUD hand-over check / hand-over in the shared draw RVA 0x2A0260)
+static const int k_item_probe_offs[8] = {0xD0, 0xD8, 0xE8, 0x178, 0x180, 0x240, 0x1348, 0x1300};
 using item_virt_t = uint64_t(__fastcall*)(uint8_t*, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-static item_virt_t g_item_probe_orig[6] = {};
+static item_virt_t g_item_probe_orig[8] = {};
 template <int I>
 static uint64_t __fastcall item_probe_hook(uint8_t* self, uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e) {
     static int logged = 0;
+    uint64_t r = g_item_probe_orig[I](self, a, b, c, d, e);
     for (int k = 0; k < g_probe_items_n; ++k)
         if (self == g_probe_items[k] && logged < 300) {
             ++logged;
-            char buf[128];
-            snprintf(buf, sizeof(buf), "item probe +0x%X item%d a2=%llX a3=%llX caller RVA 0x%llX", k_item_probe_offs[I], k,
-                     (unsigned long long)a, (unsigned long long)b,
+            char buf[144];
+            snprintf(buf, sizeof(buf), "item probe +0x%X obj%d a2=%llX a3=%llX ret=%llX caller RVA 0x%llX", k_item_probe_offs[I], k,
+                     (unsigned long long)a, (unsigned long long)b, (unsigned long long)(r & 0xFFFFFFFF),
                      (unsigned long long)((uintptr_t)_ReturnAddress() - (uintptr_t)GetModuleHandleA(nullptr)));
             LOG_INFO(buf);
         }
-    return g_item_probe_orig[I](self, a, b, c, d, e);
+    return r;
 }
-static void install_item_probes(void** vt) {
-    static const LPVOID hooks[6] = {(LPVOID)&item_probe_hook<0>, (LPVOID)&item_probe_hook<1>, (LPVOID)&item_probe_hook<2>,
-                                    (LPVOID)&item_probe_hook<3>, (LPVOID)&item_probe_hook<4>, (LPVOID)&item_probe_hook<5>};
-    static LPVOID targets[6] = {};  // one trampoline per slot: only the first item class's functions get hooked
-    for (int i = 0; i < 6; ++i) {
+static void install_item_probes(void** vt, int from, int to) {
+    static const LPVOID hooks[8] = {(LPVOID)&item_probe_hook<0>, (LPVOID)&item_probe_hook<1>, (LPVOID)&item_probe_hook<2>,
+                                    (LPVOID)&item_probe_hook<3>, (LPVOID)&item_probe_hook<4>, (LPVOID)&item_probe_hook<5>,
+                                    (LPVOID)&item_probe_hook<6>, (LPVOID)&item_probe_hook<7>};
+    static LPVOID targets[8] = {};  // one trampoline per slot: only the first item class's functions get hooked
+    for (int i = from; i < to; ++i) {
         LPVOID t = vt[k_item_probe_offs[i] / 8];
         if (!targets[i]) {
             if (MH_CreateHook(t, hooks[i], (LPVOID*)&g_item_probe_orig[i]) == MH_OK && MH_EnableHook(t) == MH_OK) targets[i] = t;
@@ -835,11 +838,13 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     uint8_t* e = entity_by_id(strtoul(c.c_str() + 11, nullptr, 16));
                     using cast_t = uint8_t*(__fastcall*)(uint8_t*);
                     uint8_t* item = e ? ((cast_t)(*(void***)e)[0x6F0 / 8])(e) : nullptr;
-                    if (!item || g_probe_items_n >= 4) { LOG_WARN("engine: hook_item: no item"); continue; }
-                    g_probe_items[g_probe_items_n++] = item;
+                    if (!item || g_probe_items_n >= 7) { LOG_WARN("engine: hook_item: no item"); continue; }
+                    g_probe_items[g_probe_items_n++] = item;  // objN: even N = item interface, odd N = its entity
+                    g_probe_items[g_probe_items_n++] = e;
                     void** vt = *(void***)item;
                     uintptr_t base = (uintptr_t)GetModuleHandleA(nullptr);
-                    install_item_probes(vt);
+                    install_item_probes(vt, 0, 6);
+                    install_item_probes(*(void***)e, 6, 8);
                     char b[128];
                     snprintf(b, sizeof(b), "engine: hook_item %X item=%p vt RVA %llX draw RVA %llX", *(uint16_t*)(e + 0x108), item,
                              (unsigned long long)((uintptr_t)vt - base), (unsigned long long)((uintptr_t)vt[0xD0 / 8] - base));
