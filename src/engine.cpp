@@ -532,6 +532,41 @@ static void ride_follow() {
     (*(set_xform_t**)me)[0x190 / 8](me, m, 0);
 }
 
+// Diagnostics (session 14, `@hook_item`): log an item's virtual calls, only for the registered items, capped.
+// Six-argument pass-through: extra stack slots are harmless when the original takes fewer.
+static uint8_t* g_probe_items[4] = {};
+static int g_probe_items_n = 0;
+static const int k_item_probe_offs[6] = {0xD0, 0xD8, 0xE8, 0x178, 0x180, 0x240};
+using item_virt_t = uint64_t(__fastcall*)(uint8_t*, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static item_virt_t g_item_probe_orig[6] = {};
+template <int I>
+static uint64_t __fastcall item_probe_hook(uint8_t* self, uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e) {
+    static int logged = 0;
+    for (int k = 0; k < g_probe_items_n; ++k)
+        if (self == g_probe_items[k] && logged < 300) {
+            ++logged;
+            char buf[128];
+            snprintf(buf, sizeof(buf), "item probe +0x%X item%d a2=%llX a3=%llX caller RVA 0x%llX", k_item_probe_offs[I], k,
+                     (unsigned long long)a, (unsigned long long)b,
+                     (unsigned long long)((uintptr_t)_ReturnAddress() - (uintptr_t)GetModuleHandleA(nullptr)));
+            LOG_INFO(buf);
+        }
+    return g_item_probe_orig[I](self, a, b, c, d, e);
+}
+static void install_item_probes(void** vt) {
+    static const LPVOID hooks[6] = {(LPVOID)&item_probe_hook<0>, (LPVOID)&item_probe_hook<1>, (LPVOID)&item_probe_hook<2>,
+                                    (LPVOID)&item_probe_hook<3>, (LPVOID)&item_probe_hook<4>, (LPVOID)&item_probe_hook<5>};
+    static LPVOID targets[6] = {};  // one trampoline per slot: only the first item class's functions get hooked
+    for (int i = 0; i < 6; ++i) {
+        LPVOID t = vt[k_item_probe_offs[i] / 8];
+        if (!targets[i]) {
+            if (MH_CreateHook(t, hooks[i], (LPVOID*)&g_item_probe_orig[i]) == MH_OK && MH_EnableHook(t) == MH_OK) targets[i] = t;
+        } else if (targets[i] != t) {
+            LOG_WARN("engine: hook_item: slot +0x" + std::to_string(k_item_probe_offs[i]) + " differs for this class, not logged");
+        }
+    }
+}
+
 static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
     static DWORD main_tid = 0;
     if (g_keep_active && !g_wndproc_orig) {
@@ -794,6 +829,37 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     LOG_INFO("engine: dump done, " + std::to_string(n) + " entities, " + std::to_string(shown) + " shown");
                     continue;
                 }
+                if (c.rfind("@hook_item ", 0) == 0) {
+                    // "@hook_item <id hex>": log calls of this item's virtuals (draw +0xD0/+0xD8, holster +0xE8,
+                    // +0x178/+0x180, hide +0x240) with time and caller (FINDINGS 5.7: 30 s draw delay on the client)
+                    uint8_t* e = entity_by_id(strtoul(c.c_str() + 11, nullptr, 16));
+                    using cast_t = uint8_t*(__fastcall*)(uint8_t*);
+                    uint8_t* item = e ? ((cast_t)(*(void***)e)[0x6F0 / 8])(e) : nullptr;
+                    if (!item || g_probe_items_n >= 4) { LOG_WARN("engine: hook_item: no item"); continue; }
+                    g_probe_items[g_probe_items_n++] = item;
+                    void** vt = *(void***)item;
+                    uintptr_t base = (uintptr_t)GetModuleHandleA(nullptr);
+                    install_item_probes(vt);
+                    char b[128];
+                    snprintf(b, sizeof(b), "engine: hook_item %X item=%p vt RVA %llX draw RVA %llX", *(uint16_t*)(e + 0x108), item,
+                             (unsigned long long)((uintptr_t)vt - base), (unsigned long long)((uintptr_t)vt[0xD0 / 8] - base));
+                    LOG_INFO(b);
+                    continue;
+                }
+                if (c.rfind("@resolve_links ", 0) == 0) {
+                    // "@resolve_links <id hex|ctl>": run the engine's lazy link resolver (RVA 0x34B50, link* -> 1 if
+                    // resolved) on the player's six entity links (+0x1740.. hands, knife, torch, heap, timer,
+                    // timer_2033). A cloned body has null handles there (FINDINGS 5.7); probe for the 30 s draw delay.
+                    uint8_t* e = c.compare(15, 3, "ctl") == 0 ? controlled() : entity_by_id(strtoul(c.c_str() + 15, nullptr, 16));
+                    uint8_t* exe = (uint8_t*)GetModuleHandleA(nullptr);
+                    if (!e || exe[0x34B50] != 0x40 || exe[0x34B56] != 0x48) { LOG_WARN("engine: resolve_links: no entity / bad build"); continue; }
+                    using resolve_t = char(__fastcall*)(uint8_t*);
+                    std::string out = "engine: resolve_links " + std::to_string(*(uint16_t*)(e + 0x108)) + ":";
+                    for (unsigned off = 0x1740; off <= 0x1790; off += 0x10)
+                        out += ((resolve_t)(exe + 0x34B50))(e + off) ? " 1" : " 0";
+                    LOG_INFO(out);
+                    continue;
+                }
                 if (c.rfind("@links ", 0) == 0) {  // diagnostics: "@links <id hex>": entity ids behind the player's
                     // hands/knife/torch/heap/timer links (+0x1740.., loader RVA 0x1DB3D0), for base e and e+0xA0
                     unsigned id = 0;
@@ -869,6 +935,9 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         snprintf(b, sizeof(b), " [w%X f%02X%02X%02X %02X%02X%02X%02X%02X%02X%02X]", *(uint16_t*)s, s[0x18], s[0x19],
                                  s[0x1A], s[0x1B], s[0x1C], s[0x1D], s[0x1E], s[0x1F], s[0x20], s[0x21]);
                         out += b;
+                        out += "{";  // raw bytes 0..0x21 (session 14: select RVA 0x4EB890 branches on +2 and +0x18..+0x21)
+                        for (int j = 0; j < 0x22; ++j) { snprintf(b, sizeof(b), "%02X", s[j]); out += b; }
+                        out += "}";
                     }
                     LOG_INFO(out);
                     continue;
@@ -1265,6 +1334,20 @@ static ammo_find_t g_ammo_find_orig = nullptr;
 static thread_local void* g_ammo_fallback = nullptr;
 static void* __fastcall ammo_find_hook(uint8_t* inv, uint8_t* slot, int check) {
     void* r = g_ammo_find_orig(inv, slot, check);
+    if (!r) {  // diagnostics (session 14): who misses? Log each (caller, type) pair once, capped
+        static std::vector<std::pair<uintptr_t, uint32_t>> seen;
+        static std::mutex m;  // lookups also run on job threads
+        std::lock_guard<std::mutex> lock(m);
+        uintptr_t ra = (uintptr_t)_ReturnAddress() - (uintptr_t)GetModuleHandleA(nullptr);
+        std::pair<uintptr_t, uint32_t> k{ra, slot ? *(uint32_t*)slot : 0};
+        if (seen.size() < 64 && std::find(seen.begin(), seen.end(), k) == seen.end()) {
+            seen.push_back(k);
+            char b[96];
+            snprintf(b, sizeof(b), "ammo find miss: caller RVA 0x%llX type %X check %d inv=%p", (unsigned long long)ra,
+                     k.second, check, inv);
+            LOG_INFO(b);
+        }
+    }
     return r ? r : g_ammo_fallback;
 }
 static void __fastcall ammo_bind_hook(uint8_t* hud, void* a2, void* a3) {
@@ -1986,9 +2069,11 @@ static uint64_t __fastcall sel_hook(uint8_t* inv, uint8_t* st, uint64_t a3, uint
     static int logged = 0;
     if (logged++ < 200) {
         char b[160];
-        snprintf(b, sizeof(b), "select inv=%p w=%X a3=%X a4=%X a5=%X", inv, st ? *(uint16_t*)st : 0xFFFF,
+        snprintf(b, sizeof(b), "select inv=%p w=%X a3=%X a4=%X a5=%X {", inv, st ? *(uint16_t*)st : 0xFFFF,
                  (unsigned)a3, (unsigned)a4, (unsigned)(uint8_t)a5);
-        LOG_INFO(b);
+        std::string out = b;
+        for (int j = 0; st && j < 0x22; ++j) { snprintf(b, sizeof(b), "%02X", st[j]); out += b; }
+        LOG_INFO(out + "}");
     }
     return g_sel_orig(inv, st, a3, a4, a5);
 }
@@ -2010,8 +2095,7 @@ static void install_netframe_counter() {
     if (MH_CreateHook(exe + 0x3EF500, (LPVOID)&mv_off_hook, (LPVOID*)&g_mv_off_orig) == MH_OK) MH_EnableHook(exe + 0x3EF500);
     if (MH_CreateHook(exe + 0x4EB890, (LPVOID)&sel_hook, (LPVOID*)&g_sel_orig) == MH_OK) MH_EnableHook(exe + 0x4EB890);
     if (MH_CreateHook(exe + 0x25DB20, (LPVOID)&netinv_hook, (LPVOID*)&g_netinv_orig) == MH_OK) MH_EnableHook(exe + 0x25DB20);
-    if (GetFileAttributesA("metro_coop/fake_ammo") != INVALID_FILE_ATTRIBUTES &&
-        MH_CreateHook(exe + 0x4E3CE0, (LPVOID)&ammo_find_hook, (LPVOID*)&g_ammo_find_orig) == MH_OK)
+    if (MH_CreateHook(exe + 0x4E3CE0, (LPVOID)&ammo_find_hook, (LPVOID*)&g_ammo_find_orig) == MH_OK)
         MH_EnableHook(exe + 0x4E3CE0);
     if (MH_CreateHook(exe + 0x752D50, (LPVOID)&block_create_hook, (LPVOID*)&g_block_create_orig) == MH_OK) MH_EnableHook(exe + 0x752D50);
     if (auto sj = find("40 55 56 41 54 41 55 41 56 48 8D 6C 24 C9 48 81 EC D0 00 00 00 4C 8D B1 88 01 00 00 4C"))

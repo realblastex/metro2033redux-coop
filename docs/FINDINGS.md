@@ -516,6 +516,39 @@ Next: (1) log every inventory vtbl+0xD0 miss with its return address (who else m
 watch inv+0xFA grow; (3) or make the host clone the player's zero-count ammo items too, so the client body's copies
 are normal networked items; (4) compare with a host-side revolver switch (does the host's own body draw it?).
 
+Session 14, part 2 (same test setup, captures over 40 s):
+
+Verified:
+- The revolver is drawn after all, **30.9 s after the switch**, plays its draw animation for about 3 s, and is gone
+  again by +36 s (empty hands). Same 30.9 s in two runs, one of them with the host's network inventory apply
+  skipped (`skip_net_inv`). This is the owner's "appears, then disappears".
+- A second switch to the revolver (third press, 80 s in) showed no revolver within 11 s either, so it is not a
+  one-time resource load.
+- Select arguments (RVA 0x4EB890, raw bytes now logged) match on both sides: the call with `a5=1` has state byte +2
+  = 0, which takes the "draw now" branch (0x4EBB91). The client then calls the revolver item's +0xD0 right away
+  (caller 0x4EBBAF, item probe), 0.3 s after the AK's holster (+0xE8, caller 0x4EBB8B) and hide (+0x240).
+- Revolver class: item vtable RVA 0xAD4050, draw RVA 0x2EA270 (entity = item - 0x430; calls entity vtbl+0xED0, then
+  +0x1438, then jumps to the shared weapon draw RVA 0x2A0260). AK class: item vtable RVA 0xA9F7A0, draw RVA 0x2D0E10.
+- No clean host control yet: on the original player pad Y goes from the AK (index 2, slot 16) to index 0 = slot 1 =
+  the **duplet** (the clone renumbers: revolver 1, AK 2), drawn within 1.7 s.
+- Ruled out as the cause: unresolved player links (`@resolve_links` resolved hands/knife/timer_2033 on the clone
+  with the engine's lazy resolver RVA 0x34B50, no change); the host's network inventory apply (skipped, same
+  30.9 s); HUD ammo bind misses (only the HUD callers 0x526B10 and 0x52917F, in RVA 0x528EF0, miss the 6 ammo types
+  at the switch; no weapon code misses; filling the bind changed nothing).
+- The clone's inventory states carry stray bytes at +3..+5 and +0x14 (`24AB01`, `AB010000`) where the host's
+  states have zeros (copy RVA 0x4F8460); the select arguments do not carry them.
+- A linear capstone sweep found no 30.0f or 30000 constant in RVA 0x1D0000-0x200000, 0x29F000-0x2F0000,
+  0x4E0000-0x500000, 0x520000-0x530000 or 0x6A0000-0x6C0000.
+
+Next: hook the shared weapon draw RVA 0x2A0260 and the weapon's per-frame update on the client and compare with the
+AK's instant draw (what does the revolver wait 30 s for?); find a host-side revolver draw as a control (weapon
+wheel, or a pad sequence that selects slot 2); try the revolver as the clone's starting weapon (host holds it when
+the joiner's body is spawned); give the clone the missing ammo items to rule out ammo for good.
+
+More diagnostics: `@hook_item <id>` (logs the item's +0xD0/+0xD8/+0xE8/+0x178/+0x180/+0x240 calls with caller),
+`@resolve_links <id|ctl>`, `ammo find miss` (every inventory vtbl+0xD0 miss with caller, once per pair), raw state
+bytes in `select inv=` and `@invst`.
+
 New capped diagnostics: `select inv=` (RVA 0x4EB890), `net inv apply` (RVA 0x25DB20; file
 `metro_coop/skip_net_inv` in the game folder makes it a no-op), `ammo bind slots:` (misses only), `fix_ammo see`
 (ammo entities within 5 m).
