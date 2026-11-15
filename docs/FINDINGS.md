@@ -549,8 +549,15 @@ Verified:
   entity** within 45 s, and nothing hooked fires at +30.9 s when the revolver shows. So the shared draw exits
   before the HUD hand-over: entity vtbl+0xED0 returned nonzero, the parent handle was null, the byte at
   `*(weapon+0x1B8)+0x11B2` was 0, or the parent was not the controlled entity. Not checked: whether these hooks
-  fire on the host for a working draw (control), and which of the four conditions fails. The late show at 30.9 s
-  takes some other path.
+  fire on the host for a working draw (control). The late show at 30.9 s takes some other path.
+- Verified (`draw checks` log at the revolver's +0xD0 call, client): item+0x630 null, item+0x88 set, parent =
+  controlled entity (match), byte +0x11B2 = 1, but **entity vtbl+0xED0 returns 6**. The draw tail needs 0 there
+  (`test eax,eax; jne` at 0x2A03C6), so it skips the HUD hand-over. The revolver's own draw wrapper RVA 0x2EA270
+  passes the same +0xED0 value to entity vtbl+0x1438 first. Earlier, a function in the item's +0x240 slot was
+  called from inside the draw (0x2A0396, 0x2A03A8) with a2 = 6.
+- Next: find what +0xED0 = 6 means (a weapon state; disassemble the revolver class's entity vtbl+0xED0 and +0x1438),
+  read the same value for the host's revolver before a draw (control; expected 0), and find what moves it from 6
+  to 0 after 30 s. Then set or skip that state on the client's cloned weapons.
 
 Next: hook the shared weapon draw RVA 0x2A0260 and the weapon's per-frame update on the client and compare with the
 AK's instant draw (what does the revolver wait 30 s for?); find a host-side revolver draw as a control (weapon

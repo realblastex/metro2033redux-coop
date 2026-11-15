@@ -543,6 +543,22 @@ static item_virt_t g_item_probe_orig[8] = {};
 template <int I>
 static uint64_t __fastcall item_probe_hook(uint8_t* self, uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e) {
     static int logged = 0;
+    if (I == 0 && g_probe_items_n >= 2 && self == g_probe_items[0]) {
+        // the shared draw RVA 0x2A0260 (item = self, entity = self - 0x430) skips the HUD hand-over when: item+0x630
+        // handle set, item+0x88 null, entity vtbl+0xED0 != 0, no parent (entity+0x118), byte *(entity+0x1B8)+0x11B2 == 0,
+        // or parent != controlled entity + 0xA0. Log them all before the draw.
+        uint8_t* en = self - 0x430;
+        uint8_t** h630 = *(uint8_t***)(self + 0x630);
+        uint8_t** ph = *(uint8_t***)(en + 0x118);
+        uint8_t* p1b8 = *(uint8_t**)(en + 0x1B8);
+        uint8_t* ctl = controlled();
+        int ed0 = ((int(__fastcall*)(uint8_t*))(*(void***)en)[0xED0 / 8])(en);
+        char buf[200];
+        snprintf(buf, sizeof(buf), "draw checks: en=%s h630=%p/%p i88=%p ed0=%d parent=%p 11B2=%d ctl+A0=%p match=%d",
+                 en == g_probe_items[1] ? "ok" : "MISMATCH", h630, h630 ? *h630 : nullptr, *(void**)(self + 0x88), ed0,
+                 ph ? *ph : nullptr, p1b8 ? p1b8[0x11B2] : -1, ctl ? ctl + 0xA0 : nullptr, ph && ctl && *ph == ctl + 0xA0);
+        LOG_INFO(buf);
+    }
     uint64_t r = g_item_probe_orig[I](self, a, b, c, d, e);
     for (int k = 0; k < g_probe_items_n; ++k)
         if (self == g_probe_items[k] && logged < 300) {
