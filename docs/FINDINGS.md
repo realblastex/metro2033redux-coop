@@ -362,7 +362,7 @@ Other open items:
 - Host logs `!G can't find player on level for take_item` and `entity_players_torch: player is absent` in MP-mode
   loads (scripts expect one single-player actor).
 
-### 5.7 Client sees two weapons (session 7, 2026-11-13, unresolved)
+### 5.7 Client sees two weapons (sessions 7-14, unresolved)
 
 Owner report: the client holds an AK and a revolver at once, and an inspect animates both. Reproduced on `l19_defence`
 with a pad Y press on the client (weapon switch). The switch shows up 10 to 20 s later. Afterwards the hands hold
@@ -469,6 +469,43 @@ Owner report (session 12): in Riga the client can't move and can't see the host.
 
 New diagnostics: `@invst <id|ctl>` (stack dump), `@poke <id|ctl> <off> <size> <val>` (write + log position),
 `@inv ctl`, `@hexdump ctl [len]`.
+
+Session 14 (2026-11-15, `main` after `709e808`, test: host `coop_l19` auto-hosts, client auto-joins and presses pad Y
+20 s apart; burst screenshots of the client window, brightened x4; private script `re_tools/wpn_launch.ps1` + `burst.ps1`).
+
+Verified:
+- Repro of a broken switch: AK (state 2, weapon index 1) -> pad Y -> the stack flips at once to index 0 (revolver,
+  slot 1) and the AK goes down, but **no revolver is drawn for the next 20 s** (empty hands in every frame). Pad Y
+  again -> the AK is drawn within 0.5 s and looks normal. No two weapons showed in this run.
+- The client's own select path runs at once: RVA 0x4EB890 logs `w=1`, then `w=0 a5=1` (hides the current item
+  first), then `w=0`, all within 0.5 s of the press. So the switch logic is fine and only the revolver's visuals
+  are missing.
+- At the same moment the client's engine log prints `!No ammo item. Save level, bleat !!!`, then every 7-11 s.
+  It comes from the HUD ammo bind RVA 0x526AA0, called every frame by the weapon HUD update RVA 0x528200
+  (`[hud owner+0x6D8]` = player). For each HUD ammo slot (hud+0x108, 0xB8 bytes, count u16 +0x112) it calls
+  inventory vtbl+0xD0 (SP class: RVA 0x4E3CE0). That walks the inventory's array at inv+0xF0 (count u16 inv+0xFA)
+  and matches `*(u32*)(*(*(*(a+0x98))+0x118)+4)` to the slot's dword +0. A miss logs and goes on to the next slot.
+- Logged on the client after the switch: 11 HUD slots, 6 of them missing (564CCB2B, C8AEFCF3, D47EA361, 81767601,
+  9CA45A39, 4C6BD212). The host logs no misses for its own HUD.
+- Ammo entities near the bodies at `fix_ammo` time (new log `fix_ammo see`): the host's player F107 owns 12 ammo
+  items (12x70, 12x70 fire, .44 fmj, .44 AP, 5.45 fmj, 7.62 fmj, 7.62 mg, dshk, 15mm, flame, flamethrower, money).
+  On the host, the cloned client body got only 3 clones (`A0C` 12x70, `E04` .44 fmj, `1119` 5.45 fmj, flags 0x12103,
+  no parent) plus `770` 12x70 fire. On the client, 8 more copies exist only there, 1.2 m away, with flags 0x10200
+  and no parent (`C13` .44 AP, `102B` money, `121B` dshk, `1323` 7.62 fmj, `1C1D` flame, `1D06` flamethrower,
+  `204B` 15mm, `290D` 7.62 mg). `fix_ammo` attaches all 11, but `@inv ctl` afterwards lists only 4 ammo items
+  (770, A0C, 1119, E04). So the 0x10200 copies get a parent but never reach the inventory's lookup array.
+
+Derived: the clone (RVA 0x4F8460 path) creates the player's extra ammo items on the client as local copies that
+are not fully spawned (no flag 0x1/0x2), so the inventory never registers them. The revolver's HUD then misses 6
+ammo types. Guess (not proven): the missing ammo, or something else in the clone, stops the revolver's draw. The
+owner's "two weapons" picture is probably the same broken draw seen from another state (5.7, session 12).
+
+Unknown: what adds an item to inv+0xF0 (the call path from an attach to the inventory), what flag 0x200 means,
+and whether the revolver draws once the ammo lookup succeeds.
+
+New capped diagnostics: `select inv=` (RVA 0x4EB890), `net inv apply` (RVA 0x25DB20; file
+`metro_coop/skip_net_inv` in the game folder makes it a no-op), `ammo bind slots:` (misses only), `fix_ammo see`
+(ammo entities within 5 m).
 
 ### 5.8 Fight test level: l03_chase handcar (session 8, 2026-11-13)
 

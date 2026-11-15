@@ -1021,6 +1021,16 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                         void* parent = *(void**)(body + 0xA0);
                         for (int i = 0; i < *(uint16_t*)(server + 0x1A); ++i) {
                             uint8_t* e = *(uint8_t**)(*(uint8_t**)(server + 0x10) + i * 16 + 8);
+                            if (e && !strncmp(entity_name(e + 0xA0), "ammo_", 5)) {  // diagnostics (session 14), capped
+                                static int dl = 0;
+                                void** h = *(void***)(e + 0x118);
+                                float x = *(float*)(e + 0xF0) - *(float*)(body + 0xF0), z = *(float*)(e + 0xF8) - *(float*)(body + 0xF8);
+                                char b[128];
+                                snprintf(b, sizeof(b), "fix_ammo see %X '%s' f=%X p=%X d=%.1f", *(uint16_t*)(e + 0x108),
+                                         entity_name(e + 0xA0), *(uint32_t*)(e + 0x10C),
+                                         h && *h ? *(uint16_t*)((uint8_t*)*h + 0x68) : 0xFFFF, sqrtf(x * x + z * z));
+                                if (x * x + z * z < 25 && dl++ < 60) LOG_INFO(b);
+                            }
                             if (!e || !(*(uint32_t*)(e + 0x10C) & 0x10000) || strncmp(entity_name(e + 0xA0), "ammo_", 5)) continue;
                             void** ph = *(void***)(e + 0x118);
                             if (ph && *ph) continue;  // already attached
@@ -1252,6 +1262,33 @@ static ammo_bind_t g_ammo_bind_orig = nullptr;
 static void __fastcall ammo_bind_hook(uint8_t* hud, void* a2, void* a3) {
     for (unsigned i = 0; i < *(uint16_t*)(hud + 0x112); ++i)
         *(int32_t*)(*(uint8_t**)(hud + 0x108) + i * 0xB8 + 0xA8) = 0;
+    // Diagnostics (session 14, capped): which slot types fail? Lookup = inventory vtbl+0xD0 (RVA 0x4E3CE0 for the SP
+    // class): walks the ammo array at inv+0xF0 (count u16 +0xFA) and matches *(*(*(*(a+0x98))+0x118)+4) to slot dword +0.
+    static int logged = 0;
+    uint8_t* inv = a3 ? *(uint8_t**)((uint8_t*)a3 + 0xB70) : nullptr;
+    if (inv && logged < 40) {
+        using find_t = void*(__fastcall*)(uint8_t*, uint8_t*, int);
+        auto find = (find_t)(*(void***)inv)[0xD0 / 8];
+        std::string out = "ammo bind slots:";
+        bool miss = false;
+        char b[48];
+        for (unsigned i = 0; i < *(uint16_t*)(hud + 0x112); ++i) {
+            uint8_t* s = *(uint8_t**)(hud + 0x108) + i * 0xB8;
+            bool ok = find(inv, s, 0) != nullptr;
+            miss |= !ok;
+            snprintf(b, sizeof(b), " %X%s", *(uint32_t*)s, ok ? "" : "(MISSING)");
+            out += b;
+        }
+        out += " | inv ammo:";
+        for (unsigned i = 0; i < *(uint16_t*)(inv + 0xFA); ++i) {
+            uint8_t* a = (*(uint8_t***)(inv + 0xF0))[i];
+            uint8_t** r = a ? *(uint8_t***)(a + 0x98) : nullptr;
+            uint8_t* d = r && *r ? *(uint8_t**)(*r + 0x118) : nullptr;
+            snprintf(b, sizeof(b), " %X", d ? *(uint32_t*)(d + 4) : 0xFFFFFFFFu);
+            out += b;
+        }
+        if (miss) { ++logged; LOG_INFO(out); }
+    }
     g_ammo_bind_orig(hud, a2, a3);
 }
 
@@ -1921,10 +1958,40 @@ static void mv_log(const char* what, uint8_t* a, uint8_t* t) {
 static uint64_t __fastcall mv_on_hook(uint8_t* a, uint64_t t, uint64_t y, uint64_t z) { mv_log("apply", a, (uint8_t*)t); return g_mv_on_orig(a, t, y, z); }
 static uint64_t __fastcall mv_off_hook(uint8_t* a, uint64_t t, uint64_t y, uint64_t z) { mv_log("restore", a, (uint8_t*)t); return g_mv_off_orig(a, t, y, z); }
 
+// Diagnostics (FINDINGS 5.7, session 14): when does a weapon switch reach the game's select path RVA 0x4EB890(inv,
+// state, draw, force, hide_current) and the network inventory apply RVA 0x25DB20(inv, state byte)? Capped logs.
+// File `metro_coop/skip_net_inv` in the game folder makes the network apply a no-op (probe for host interference).
+typedef uint64_t(__fastcall* sel5_t)(uint8_t*, uint8_t*, uint64_t, uint64_t, uint64_t);
+static sel5_t g_sel_orig = nullptr;
+static act_slot_t g_netinv_orig = nullptr;
+static uint64_t __fastcall sel_hook(uint8_t* inv, uint8_t* st, uint64_t a3, uint64_t a4, uint64_t a5) {
+    static int logged = 0;
+    if (logged++ < 200) {
+        char b[160];
+        snprintf(b, sizeof(b), "select inv=%p w=%X a3=%X a4=%X a5=%X", inv, st ? *(uint16_t*)st : 0xFFFF,
+                 (unsigned)a3, (unsigned)a4, (unsigned)(uint8_t)a5);
+        LOG_INFO(b);
+    }
+    return g_sel_orig(inv, st, a3, a4, a5);
+}
+static uint64_t __fastcall netinv_hook(uint8_t* inv, uint64_t st, uint64_t y, uint64_t z) {
+    static int logged = 0;
+    static const bool skip = GetFileAttributesA("metro_coop/skip_net_inv") != INVALID_FILE_ATTRIBUTES;
+    uint8_t old = inv ? inv[8] : 0;
+    if ((uint8_t)st != old && logged++ < 200) {
+        char b[96];
+        snprintf(b, sizeof(b), "net inv apply inv=%p %X -> %X%s", inv, old, (unsigned)(uint8_t)st, skip ? " (skipped)" : "");
+        LOG_INFO(b);
+    }
+    return skip ? 0 : g_netinv_orig(inv, st, y, z);
+}
+
 static void install_netframe_counter() {
     auto* exe = (uint8_t*)GetModuleHandleA(nullptr);
     if (MH_CreateHook(exe + 0x3EF4C4, (LPVOID)&mv_on_hook, (LPVOID*)&g_mv_on_orig) == MH_OK) MH_EnableHook(exe + 0x3EF4C4);
     if (MH_CreateHook(exe + 0x3EF500, (LPVOID)&mv_off_hook, (LPVOID*)&g_mv_off_orig) == MH_OK) MH_EnableHook(exe + 0x3EF500);
+    if (MH_CreateHook(exe + 0x4EB890, (LPVOID)&sel_hook, (LPVOID*)&g_sel_orig) == MH_OK) MH_EnableHook(exe + 0x4EB890);
+    if (MH_CreateHook(exe + 0x25DB20, (LPVOID)&netinv_hook, (LPVOID*)&g_netinv_orig) == MH_OK) MH_EnableHook(exe + 0x25DB20);
     if (MH_CreateHook(exe + 0x752D50, (LPVOID)&block_create_hook, (LPVOID*)&g_block_create_orig) == MH_OK) MH_EnableHook(exe + 0x752D50);
     if (auto sj = find("40 55 56 41 54 41 55 41 56 48 8D 6C 24 C9 48 81 EC D0 00 00 00 4C 8D B1 88 01 00 00 4C"))
         if (MH_CreateHook((LPVOID)*sj, (LPVOID)&send_job_hook, (LPVOID*)&g_send_job_orig) == MH_OK) {
