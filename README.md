@@ -7,7 +7,7 @@ level with two players.
 This repo holds the **clean source** and the **findings**. It is the project link for this game's entry in the
 coop-anything directory. Game files are not included and never will be.
 
-## Status (2026-11-13)
+## Status (2026-11-15)
 
 What works:
 
@@ -39,6 +39,9 @@ What works:
 - Checkpoint saves written while hosting load again (FINDINGS 5.10). They go to `coop_auto_save`, so the host's
   own single-player `auto_save` stays untouched. The joiner's game writes no saves while it is in a session, so its
   own saves stay untouched too.
+- The mod has its own message channel inside the engine's ENet connection. The host uses it to tell the client
+  when a new level is ready, and to forward its level script's player actions (`actions/player/*`) to the client,
+  which runs the same script blocks (FINDINGS 5.12, 5.13).
 - The windows are titled `Metro Redux [host]` and `Metro Redux [client]` after `@host` / `@join`.
   Three game crashes that assume one single player exist were guarded for this (FINDINGS 5.5).
 
@@ -49,8 +52,11 @@ What does not work yet:
 
 - Both bodies spawn on the same spot; `@join` then moves the client 1.2 m in front of the host. A wall there would
   block that. See [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
-- The two-weapons view after a weapon switch (FINDINGS 5.7) did not come back in a retest on 2026-11-13, and the
-  owner no longer sees it. The cause was never found.
+- Weapon switching on the client is broken. Switching from the AK to the revolver leaves empty hands (the revolver
+  is never drawn), and the owner sometimes sees two weapons at once. The client's weapon HUD misses 6 of 11 ammo
+  types: the joiner's cloned body lacks most of the host player's ammo items (FINDINGS 5.7, work in progress).
+- In `l04_riga`'s opening bar scene the client's body can't move, and the client can't see the host
+  (FINDINGS 5.12). Forwarding the host's player script actions did not unlock it.
 - The host draws the client's body wrong: up close it shows a big bare arm with a blade, while the client holds its
   AK. The client's weapon choice never reaches the host.
 - NPCs near the players replicate from the host (distance priority, ~128 bytes per packet); far NPCs did not update
