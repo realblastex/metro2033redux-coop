@@ -503,6 +503,19 @@ owner's "two weapons" picture is probably the same broken draw seen from another
 Unknown: what adds an item to inv+0xF0 (the call path from an attach to the inventory), what flag 0x200 means,
 and whether the revolver draws once the ammo lookup succeeds.
 
+- Probe (file `metro_coop/fake_ammo` on the client): during the HUD bind, a missed lookup returns an ammo item that
+  resolved for another slot (hook on RVA 0x4E3CE0, active only inside the bind). Result: the revolver is still not
+  drawn in 11 s. `!No ammo item` still appears at the switch and once 13 s later, so lookups outside the bind
+  (probably the ammo count RVA 0x2AEAF0) still miss. Inconclusive: the HUD bind alone is not the cause.
+- Searched for the code that adds an item to inv+0xF0: writers of a u16 at +0xFA include SP inventory vtbl+0x318
+  (clone copy RVA 0x4F8460) and vtbl+0x0 (destructor RVA 0x25EA10); RVA 0x4E1AA0 (vtbl+0x10) writes a stack vector.
+  The add path is still unknown (likely a generic vector push on &inv->array).
+
+Next: (1) log every inventory vtbl+0xD0 miss with its return address (who else misses at the switch);
+(2) find the add-to-inventory path, e.g. hook the attach RVA 0x6DD360 on the host's own body during a pickup and
+watch inv+0xFA grow; (3) or make the host clone the player's zero-count ammo items too, so the client body's copies
+are normal networked items; (4) compare with a host-side revolver switch (does the host's own body draw it?).
+
 New capped diagnostics: `select inv=` (RVA 0x4EB890), `net inv apply` (RVA 0x25DB20; file
 `metro_coop/skip_net_inv` in the game folder makes it a no-op), `ammo bind slots:` (misses only), `fix_ammo see`
 (ammo entities within 5 m).

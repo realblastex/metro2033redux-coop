@@ -1259,6 +1259,14 @@ static void __fastcall track_hook(void* e) {
 // client's cloned body fired in l19_defence (verified 14:05). Reset the index to 0 first so a failed bind stays safe.
 using ammo_bind_t = void(__fastcall*)(uint8_t*, void*, void*);
 static ammo_bind_t g_ammo_bind_orig = nullptr;
+// SP inventory vtbl+0xD0 (RVA 0x4E3CE0) ammo lookup; returns the bind's fallback item on a miss (probe, see below)
+using ammo_find_t = void*(__fastcall*)(uint8_t*, uint8_t*, int);
+static ammo_find_t g_ammo_find_orig = nullptr;
+static thread_local void* g_ammo_fallback = nullptr;
+static void* __fastcall ammo_find_hook(uint8_t* inv, uint8_t* slot, int check) {
+    void* r = g_ammo_find_orig(inv, slot, check);
+    return r ? r : g_ammo_fallback;
+}
 static void __fastcall ammo_bind_hook(uint8_t* hud, void* a2, void* a3) {
     for (unsigned i = 0; i < *(uint16_t*)(hud + 0x112); ++i)
         *(int32_t*)(*(uint8_t**)(hud + 0x108) + i * 0xB8 + 0xA8) = 0;
@@ -1289,7 +1297,17 @@ static void __fastcall ammo_bind_hook(uint8_t* hud, void* a2, void* a3) {
         }
         if (miss) { ++logged; LOG_INFO(out); }
     }
+    // Probe (session 14): with file `metro_coop/fake_ammo` in the game folder, a slot whose lookup misses gets an
+    // ammo item that resolved for another slot (see ammo_find_hook). Does the revolver draw once the bind succeeds?
+    static const bool fake = GetFileAttributesA("metro_coop/fake_ammo") != INVALID_FILE_ATTRIBUTES;
+    if (fake && inv) {
+        using find_t = void*(__fastcall*)(uint8_t*, uint8_t*, int);
+        auto find = (find_t)(*(void***)inv)[0xD0 / 8];
+        for (unsigned i = 0; !g_ammo_fallback && i < *(uint16_t*)(hud + 0x112); ++i)
+            g_ammo_fallback = find(inv, *(uint8_t**)(hud + 0x108) + i * 0xB8, 0);
+    }
     g_ammo_bind_orig(hud, a2, a3);
+    g_ammo_fallback = nullptr;
 }
 
 // RVA 0x2AEAF0 (weapon ammo count, -1 = no weapon) looks the ammo item up with inventory vtbl+0xD0 and dereferences
@@ -1992,6 +2010,9 @@ static void install_netframe_counter() {
     if (MH_CreateHook(exe + 0x3EF500, (LPVOID)&mv_off_hook, (LPVOID*)&g_mv_off_orig) == MH_OK) MH_EnableHook(exe + 0x3EF500);
     if (MH_CreateHook(exe + 0x4EB890, (LPVOID)&sel_hook, (LPVOID*)&g_sel_orig) == MH_OK) MH_EnableHook(exe + 0x4EB890);
     if (MH_CreateHook(exe + 0x25DB20, (LPVOID)&netinv_hook, (LPVOID*)&g_netinv_orig) == MH_OK) MH_EnableHook(exe + 0x25DB20);
+    if (GetFileAttributesA("metro_coop/fake_ammo") != INVALID_FILE_ATTRIBUTES &&
+        MH_CreateHook(exe + 0x4E3CE0, (LPVOID)&ammo_find_hook, (LPVOID*)&g_ammo_find_orig) == MH_OK)
+        MH_EnableHook(exe + 0x4E3CE0);
     if (MH_CreateHook(exe + 0x752D50, (LPVOID)&block_create_hook, (LPVOID*)&g_block_create_orig) == MH_OK) MH_EnableHook(exe + 0x752D50);
     if (auto sj = find("40 55 56 41 54 41 55 41 56 48 8D 6C 24 C9 48 81 EC D0 00 00 00 4C 8D B1 88 01 00 00 4C"))
         if (MH_CreateHook((LPVOID)*sj, (LPVOID)&send_job_hook, (LPVOID*)&g_send_job_orig) == MH_OK) {
