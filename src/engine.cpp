@@ -32,6 +32,7 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r);
 static bool install_player_slot_fix();
 static void install_netframe_counter();
 static bool g_minimal = false;  // `metro_coop/minimal`: automation hooks only (see engine_init)
+static int holster_stray(uint8_t* e, int mode);
 static void engine_watch_net_time();
 void engine_watch_write(uintptr_t addr);
 static void pad_command(const std::string& args);
@@ -856,6 +857,12 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                     LOG_INFO("engine: dump done, " + std::to_string(n) + " entities, " + std::to_string(shown) + " shown");
                     continue;
                 }
+                if (c.rfind("@holster_stray ", 0) == 0) {  // "@holster_stray <id hex|ctl> [mode]" (see holster_stray)
+                    uint8_t* e = c.compare(15, 3, "ctl") == 0 ? controlled() : entity_by_id(strtoul(c.c_str() + 15, nullptr, 16));
+                    size_t sp = c.find(' ', 15);
+                    holster_stray(e, sp == std::string::npos ? 0 : atoi(c.c_str() + sp + 1));
+                    continue;
+                }
                 if (c.rfind("@hook_item ", 0) == 0) {
                     // "@hook_item <id hex>": log calls of this item's virtuals (draw +0xD0/+0xD8, holster +0xE8,
                     // +0x178/+0x180, hide +0x240) with time and caller (FINDINGS 5.7, weapon switch)
@@ -1272,6 +1279,43 @@ static spp_t g_spp_orig = nullptr;
 
 static std::atomic<uint32_t> g_auto_spawn_s{0};
 void engine_set_auto_spawn(uint32_t delay_s) { g_auto_spawn_s = delay_s; }
+// A new (cloned) client body starts with two weapons drawn: its current one plus another (l19: AK + revolver, both play
+// the idle inspect) until the first weapon switch (FINDINGS 5.7). A stray is a firearm (weapon-index slot 1/2/6/16,
+// RVA 0x4EBE00) that is not the inventory's current item (inv vtbl+0x68, as the select path RVA 0x4EB9F7 asks) but
+// still holds the drawn marker at entity+0x5B8 (null on holstered weapons). mode 0 logs; mode 2 does what switching
+// away does to the old weapon: item vtbl+0xE8 (holster, select 0x4EBB85), then +0x240 (hide, 0x4EBA0F).
+static int holster_stray(uint8_t* e, int mode) {
+    uint8_t* inv = e ? *(uint8_t**)(e + 0xB70) : nullptr;
+    uint8_t* owner = inv && *(uint8_t**)(inv + 0x28) ? *(uint8_t**)(*(uint8_t**)(inv + 0x28) + 8) : nullptr;
+    if (!owner) return -1;
+    using vf_t = uint8_t*(__fastcall*)(void*);
+    using cur_t = uint8_t*(__fastcall*)(uint8_t*, uint64_t, uint64_t, uint64_t);
+    uint8_t* cur = ((cur_t)(*(void***)inv)[0x68 / 8])(inv, 0, 0, 0);
+    std::string out = "engine: holster_stray " + std::to_string(*(uint16_t*)(e + 0x108)) + " mode " + std::to_string(mode) + ":";
+    int n = 0;
+    for (int k = 0; k < *(uint16_t*)(owner + 0x15A); ++k) {
+        uint8_t* t = **(uint8_t***)(*(uint8_t**)(owner + 0x150) + k * 8);
+        if (!t || strncmp(entity_name(t), "wpn_", 4)) continue;
+        uint8_t* it_e = t - 0xA0;
+        uint8_t* item = ((vf_t)(*(void***)it_e)[0x6F0 / 8])(it_e);
+        if (!item) continue;
+        uint8_t slot = item[0xAA];
+        if (slot != 1 && slot != 2 && slot != 6 && slot != 16) continue;
+        bool stray = item != cur && *(void**)(it_e + 0x5B8);
+        char b[128];
+        snprintf(b, sizeof(b), " %X'%s's%u%s 5B8=%p 5D4=%08X%s", *(uint16_t*)(it_e + 0x108), entity_name(t), slot,
+                 item == cur ? "(current)" : "", *(void**)(it_e + 0x5B8), *(uint32_t*)(it_e + 0x5D4), stray ? " STRAY" : "");
+        out += b;
+        if (stray && mode >= 2) {
+            ((vf_t)(*(void***)item)[0xE8 / 8])(item);
+            ((vf_t)(*(void***)item)[0x240 / 8])(item);
+            ++n;
+        }
+    }
+    LOG_INFO(out);
+    return n;
+}
+
 void engine_tick() {
     if (engine_client_in_session()) act_pending_run();
     if (!g_minimal) install_save_hook();  // once the save manager exists (both host and client write checkpoints)
@@ -1292,9 +1336,7 @@ void engine_tick() {
     uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA
     uint8_t* ctl = lvl ? *(uint8_t**)(lvl + 0x38) : nullptr;
     int local = *(int32_t*)((uint8_t*)GetModuleHandleA(nullptr) + 0xFD5028);  // net_core local slot index
-    // Client: a new (cloned) body starts with two weapons active, its current one plus another (l19: AK + revolver, both
-    // play the idle inspect) until the first weapon switch (FINDINGS 5.7). Switch away and back like a player would.
-    // shortcut: two pad Y presses rely on the default binding (Y = switch weapon); upgrade: holster the stray item.
+    // Client: holster the stray drawn weapon of a new body (see holster_stray), 3 s and 6 s after it arrives.
     static uint64_t wpn_fix_at = 0;
     static int wpn_fix_left = 0;
     if (ctl && last_ctl && ctl != last_ctl && local > 0) {
@@ -1303,9 +1345,8 @@ void engine_tick() {
         wpn_fix_at = GetTickCount64() + 3000; wpn_fix_left = 2;
     }
     if (wpn_fix_left > 0 && GetTickCount64() >= wpn_fix_at) {
-        engine_exec("@pad 8000 0 0 200");
+        holster_stray(ctl, 2);
         wpn_fix_at = GetTickCount64() + 3000; --wpn_fix_left;
-        LOG_INFO("engine: weapon refresh switch " + std::to_string(2 - wpn_fix_left) + "/2");
     }
     if (ctl) last_ctl = ctl;
     // Host: respawn a joiner whose body died (health float entity+0x308 <= 0), 5 s after death.

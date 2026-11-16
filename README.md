@@ -52,10 +52,10 @@ What does not work yet:
 
 - Both bodies spawn on the same spot; `@join` then moves the client 1.2 m in front of the host. A wall there would
   block that. See [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
-- A new client body starts with two weapons active (l19: AK and revolver, both play the idle inspect) until the
-  first weapon switch. The mod now switches away and back by itself (two pad Y presses) a few seconds after the body
-  arrives (FINDINGS 5.7). The client's weapon HUD misses 6 of 11 ammo types (cosmetic): the joiner's cloned body
-  lacks most of the host player's ammo items.
+- Fixed: a new client body started with two weapons drawn (l19: AK and revolver, both in the idle inspect) until the
+  first weapon switch. The mod now holsters the stray weapon a few seconds after the body arrives (FINDINGS 5.7).
+- The client's weapon HUD misses 6 of 11 ammo types (cosmetic): the joiner's cloned body lacks most of the host
+  player's ammo items.
 - In `l04_riga`'s opening bar scene the client's body can't move, and the client can't see the host
   (FINDINGS 5.12). Forwarding the host's player script actions did not unlock it.
 - The host draws the client's body wrong: up close it shows a big bare arm with a blade, while the client holds its
