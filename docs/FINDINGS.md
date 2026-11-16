@@ -362,7 +362,7 @@ Other open items:
 - Host logs `!G can't find player on level for take_item` and `entity_players_torch: player is absent` in MP-mode
   loads (scripts expect one single-player actor).
 
-### 5.7 Client sees two weapons (sessions 7-14, unresolved; see the session 14 correction)
+### 5.7 Client sees two weapons (sessions 7-14; worked around in session 14 part 3)
 
 Owner report: the client holds an AK and a revolver at once, and an inspect animates both. Reproduced on `l19_defence`
 with a pad Y press on the client (weapon switch). The switch shows up 10 to 20 s later. Afterwards the hands hold
@@ -583,6 +583,23 @@ bytes in `select inv=` and `@invst`.
 New capped diagnostics: `select inv=` (RVA 0x4EB890), `net inv apply` (RVA 0x25DB20; file
 `metro_coop/skip_net_inv` in the game folder makes it a no-op), `ammo bind slots:` (misses only), `fix_ammo see`
 (ammo entities within 5 m).
+
+Session 14, part 3 (2026-11-16): **reproduced and worked around.**
+- Owner's details: the two weapons show right after the client's body spawns on l19 (AK and revolver), stay until
+  the client's first weapon switch, and the idle inspect animation animates both. Not seen on l03.
+- Verified (client view, full frames at 3x brightness, `coop_l19`, no client input): 10 s after the body arrives the
+  AK shows in idle. At 33 s the idle inspect shows the AK in the left hand and the revolver in the right hand.
+- Verified (`@hexdump 2604 800` / `2124 800`, before and after two pad Y switches): on the revolver entity, +0x5B8
+  (item+0x188) holds a pointer before and is null after; +0x5D4 goes 01010101 -> 00000100, +0x5C8 FFFFFFFF -> 0D,
+  +0x5D0 00107F88 -> 0. The AK (drawn) keeps a pointer at +0x5B8. Derived: right after the clone both weapons carry
+  the drawn/attached state; a switch makes the game holster the stray one properly.
+- Fix (shortcut, `engine_tick`): about 3 s after the client's body arrives (first body and respawns) the client
+  presses Y twice, 3 s apart (`engine: weapon refresh switch 1/2`, `2/2`), and ends on the same weapon. Verified:
+  the first idle inspect after the refresh (39.5 s) shows only the AK, the right hand empty. Smoke on this build:
+  `-Launcher` PASS 8, `-Launcher -Save coop_l19 -Respawn` PASS 10 (refresh ran for both bodies).
+- Unknown / upgrade: what activates the stray weapon at clone time (candidates: the clone copy RVA 0x4F8460, its
+  empty initial state stack, the slot renumbering: original duplet 1 / revolver 2 / AK 16, clone revolver 1 / AK 2).
+  Holstering the stray item directly would avoid the visible double switch and the dependency on the Y binding.
 
 ### 5.8 Fight test level: l03_chase handcar (session 8, 2026-11-13)
 

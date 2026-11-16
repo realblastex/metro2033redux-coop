@@ -1292,9 +1292,20 @@ void engine_tick() {
     uint8_t* lvl = *(uint8_t**)((uint8_t*)GetModuleHandleA(nullptr) + 0xFBD820);  // shortcut: fixed RVA
     uint8_t* ctl = lvl ? *(uint8_t**)(lvl + 0x38) : nullptr;
     int local = *(int32_t*)((uint8_t*)GetModuleHandleA(nullptr) + 0xFD5028);  // net_core local slot index
+    // Client: a new (cloned) body starts with two weapons active, its current one plus another (l19: AK + revolver, both
+    // play the idle inspect) until the first weapon switch (FINDINGS 5.7). Switch away and back like a player would.
+    // shortcut: two pad Y presses rely on the default binding (Y = switch weapon); upgrade: holster the stray item.
+    static uint64_t wpn_fix_at = 0;
+    static int wpn_fix_left = 0;
     if (ctl && last_ctl && ctl != last_ctl && local > 0) {
         engine_exec("@goto s0 1.2");
         engine_exec("@fix_ammo s" + std::to_string(local));
+        wpn_fix_at = GetTickCount64() + 3000; wpn_fix_left = 2;
+    }
+    if (wpn_fix_left > 0 && GetTickCount64() >= wpn_fix_at) {
+        engine_exec("@pad 8000 0 0 200");
+        wpn_fix_at = GetTickCount64() + 3000; --wpn_fix_left;
+        LOG_INFO("engine: weapon refresh switch " + std::to_string(2 - wpn_fix_left) + "/2");
     }
     if (ctl) last_ctl = ctl;
     // Host: respawn a joiner whose body died (health float entity+0x308 <= 0), 5 s after death.
