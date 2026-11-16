@@ -362,7 +362,7 @@ Other open items:
 - Host logs `!G can't find player on level for take_item` and `entity_players_torch: player is absent` in MP-mode
   loads (scripts expect one single-player actor).
 
-### 5.7 Client sees two weapons (sessions 7-14, unresolved)
+### 5.7 Client sees two weapons (sessions 7-14, unresolved; see the session 14 correction)
 
 Owner report: the client holds an AK and a revolver at once, and an inspect animates both. Reproduced on `l19_defence`
 with a pad Y press on the client (weapon switch). The switch shows up 10 to 20 s later. Afterwards the hands hold
@@ -469,6 +469,18 @@ Owner report (session 12): in Riga the client can't move and can't see the host.
 
 New diagnostics: `@invst <id|ctl>` (stack dump), `@poke <id|ctl> <off> <size> <val>` (write + log position),
 `@inv ctl`, `@hexdump ctl [len]`.
+
+**Correction (session 14, later, 2026-11-16): the revolver draw works.** The session 14 notes below that say the
+revolver is "never drawn", "drawn 30.9 s after the switch" or "skipped by the HUD hand-over" were a misreading of
+dark, downscaled contact sheets. A full-resolution crop with 4x brightness, 4 s after an ubludok -> revolver switch
+(single player, l03), shows the revolver in the right hand, seen from behind, with its glowing front sight. A raw
+`PrintWindow` capture and a copy of the real screen pixels gave the same frame, so the capture method is fine. The
+moment at ~31 s is the normal idle inspect animation, which turns the revolver sideways. The owner also sees the
+revolver normally. Still true from those notes: the client's weapon HUD misses 6 of 11 ammo types (cosmetic, the
+joiner's cloned body lacks most of the host player's ammo items), the select path and item virtual calls as logged,
+and entity vtbl+0xED0 being a per-weapon-type value (AK 30, duplet 2, revolver 6, the same on the host). Not yet
+reproduced: the owner's "two weapons appear, then disappear" after a client weapon switch. Lesson: judge held
+weapons from full-resolution, brightened crops, never from 320-px thumbnails of dark scenes.
 
 Session 14 (2026-11-15, `main` after `709e808`, test: host `coop_l19` auto-hosts, client auto-joins and presses pad Y
 20 s apart; burst screenshots of the client window, brightened x4; private script `re_tools/wpn_launch.ps1` + `burst.ps1`).

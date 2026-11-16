@@ -52,9 +52,9 @@ What does not work yet:
 
 - Both bodies spawn on the same spot; `@join` then moves the client 1.2 m in front of the host. A wall there would
   block that. See [docs/FINDINGS.md](docs/FINDINGS.md), section 5.
-- Weapon switching on the client is broken. Switching from the AK to the revolver leaves empty hands (the revolver
-  is never drawn), and the owner sometimes sees two weapons at once. The client's weapon HUD misses 6 of 11 ammo
-  types: the joiner's cloned body lacks most of the host player's ammo items (FINDINGS 5.7, work in progress).
+- The owner sometimes sees two weapons at once on the client right after a weapon switch (FINDINGS 5.7); automated
+  captures have not reproduced it yet. The client's weapon HUD misses 6 of 11 ammo types (cosmetic): the joiner's
+  cloned body lacks most of the host player's ammo items.
 - In `l04_riga`'s opening bar scene the client's body can't move, and the client can't see the host
   (FINDINGS 5.12). Forwarding the host's player script actions did not unlock it.
 - The host draws the client's body wrong: up close it shows a big bare arm with a blade, while the client holds its

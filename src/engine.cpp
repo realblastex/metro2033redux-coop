@@ -31,6 +31,7 @@ static peek_t g_peek_orig = nullptr;
 static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r);
 static bool install_player_slot_fix();
 static void install_netframe_counter();
+static bool g_minimal = false;  // `metro_coop/minimal`: automation hooks only (see engine_init)
 static void engine_watch_net_time();
 void engine_watch_write(uintptr_t addr);
 static void pad_command(const std::string& args);
@@ -389,8 +390,15 @@ bool engine_init(const std::string& engine_log_path) {
     LOG_INFO("engine: engine log -> " + engine_log_path + (g_engine_log ? "" : " (OPEN FAILED)"));
     ((slog_t)*slog)("metro_coop: slog hook self-test");  // must show up as the first engine.log line
 
-    install_player_slot_fix();
-    install_netframe_counter();
+    // Diagnostics: file `metro_coop/minimal` in the game folder keeps only the automation hooks (engine log, main-thread
+    // console, pad, keep-active) and skips every game-logic hook, for single-player baselines (session 14).
+    if (GetFileAttributesA("metro_coop/minimal") != INVALID_FILE_ATTRIBUTES) {
+        g_minimal = true;
+        LOG_INFO("engine: MINIMAL mode (metro_coop/minimal): game-logic hooks not installed");
+    } else {
+        install_player_slot_fix();
+        install_netframe_counter();
+    }
 
     LPVOID peek = (LPVOID)GetProcAddress(GetModuleHandleA("user32.dll"), "PeekMessageA");
     if (MH_CreateHook(peek, (LPVOID)&peek_hook, (LPVOID*)&g_peek_orig) != MH_OK || MH_EnableHook(peek) != MH_OK) {
@@ -850,7 +858,7 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                 }
                 if (c.rfind("@hook_item ", 0) == 0) {
                     // "@hook_item <id hex>": log calls of this item's virtuals (draw +0xD0/+0xD8, holster +0xE8,
-                    // +0x178/+0x180, hide +0x240) with time and caller (FINDINGS 5.7: 30 s draw delay on the client)
+                    // +0x178/+0x180, hide +0x240) with time and caller (FINDINGS 5.7, weapon switch)
                     uint8_t* e = entity_by_id(strtoul(c.c_str() + 11, nullptr, 16));
                     using cast_t = uint8_t*(__fastcall*)(uint8_t*);
                     uint8_t* item = e ? ((cast_t)(*(void***)e)[0x6F0 / 8])(e) : nullptr;
@@ -870,7 +878,7 @@ static BOOL WINAPI peek_hook(LPMSG m, HWND h, UINT a, UINT b, UINT r) {
                 if (c.rfind("@resolve_links ", 0) == 0) {
                     // "@resolve_links <id hex|ctl>": run the engine's lazy link resolver (RVA 0x34B50, link* -> 1 if
                     // resolved) on the player's six entity links (+0x1740.. hands, knife, torch, heap, timer,
-                    // timer_2033). A cloned body has null handles there (FINDINGS 5.7); probe for the 30 s draw delay.
+                    // timer_2033). A cloned body has null handles there (FINDINGS 5.7).
                     uint8_t* e = c.compare(15, 3, "ctl") == 0 ? controlled() : entity_by_id(strtoul(c.c_str() + 15, nullptr, 16));
                     uint8_t* exe = (uint8_t*)GetModuleHandleA(nullptr);
                     if (!e || exe[0x34B50] != 0x40 || exe[0x34B56] != 0x48) { LOG_WARN("engine: resolve_links: no entity / bad build"); continue; }
@@ -1266,7 +1274,7 @@ static std::atomic<uint32_t> g_auto_spawn_s{0};
 void engine_set_auto_spawn(uint32_t delay_s) { g_auto_spawn_s = delay_s; }
 void engine_tick() {
     if (engine_client_in_session()) act_pending_run();
-    install_save_hook();  // once the save manager exists (both host and client write checkpoints)
+    if (!g_minimal) install_save_hook();  // once the save manager exists (both host and client write checkpoints)
     if (g_save_since && GetTickCount64() - g_save_since > 15000) save_restore_flag("timeout");
     // shortcut: one pending spawn at a time; a second peer joining within the delay replaces the first one's
     int slot = g_spawn_slot;
